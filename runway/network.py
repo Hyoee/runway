@@ -88,6 +88,8 @@ class Network:
     route_vol: dict = field(default_factory=dict)   # 노선 → 시간대별(06~14시) 노선 전체 이용객 (대회일 유형 하루)
     daytype: str = 'weekend'                        # 이 네트워크의 수요 기준 (Params.DAYTYPE과 같아야 함)
     route_source: str = ''
+    RET: dict = field(default_factory=dict)          # 회귀 금지 arc 쌍 (a, b) → 겹침 길이 m
+    CLOSE: list = field(default_factory=list)        # 재방문 판정용 가까운 구간 쌍 (s1, s2)
 
     @property
     def NA(self) -> int:
@@ -272,7 +274,7 @@ def _head(pts, from_start, dist=40.0):
     return _bearing(seq[0], seq[j]) if from_start else _bearing(seq[j], seq[0])
 
 
-def _shape_features(net: Network, near_r):
+def _shape_features(net: Network, near_r, return_r=500.0, revisit_r=300.0):
     NA, SEG, REV, Lm, segs = net.NA, net.SEG, net.REV, net.Lm, net.segs
     xy_of = lambda a: np.array([(net.allnodes[n][1] * KX, net.allnodes[n][0] * KY) for n in net.path_of(a)])
     HOUT = np.zeros(NA); HIN = np.zeros(NA)
@@ -323,7 +325,48 @@ def _shape_features(net: Network, near_r):
                     continue
                 seen.add(sj); out[(si, sj)] = out.get((si, sj), 0) + 20.0
         return {k: v for k, v in out.items() if v >= min_overlap}
-    return HOUT, HIN, TWINS, near_pairs(tuple(near_r))
+
+    def return_pairs(R, min_overlap=200.0):
+        """회귀(되돌아오기) arc 쌍: 서로 R m 안에서 '반대 방향으로 달리게 되는' 두 arc (겹침 ≥ min_overlap m).
+        같은 도로 반대 차로, 반환 왕복, 옆 길로 되돌아오기를 모두 포함. 구간 방향(짝수 arc) 기준으로
+        반대 방향 기하(Δ≥150°)면 같은 방향 arc끼리, 같은 방향 기하(Δ≤30°)면 서로 반대 arc끼리가 회귀다."""
+        even = PA % 2 == 0
+        pts, hd, sg = PTS[even], PH[even], SEG[PA[even]]
+        cnt = {}
+        for i, nb in enumerate(cKDTree(pts).query_ball_point(pts, R)):
+            si, seen = int(sg[i]), set()
+            for j in nb:
+                sj = int(sg[j])
+                if sj <= si or sj in seen:
+                    continue
+                d = abs((hd[i] - hd[j] + 180) % 360 - 180)
+                if 30 < d < 150:
+                    continue
+                if d <= 30:                                            # 같은 직선 위 연속 구간(옆으로 30m 미만)은 회귀 아님
+                    hx, hy = math.sin(math.radians(hd[i])), math.cos(math.radians(hd[i]))
+                    dx, dy = pts[j] - pts[i]
+                    if abs(dx * hy - dy * hx) < 30:
+                        continue
+                seen.add(sj); k = (si, sj, d >= 150); cnt[k] = cnt.get(k, 0) + 20.0
+        out = {}
+        for (s1, s2, anti), L in cnt.items():
+            if L < min_overlap:
+                continue
+            for a, b in (((2 * s1, 2 * s2), (2 * s1 + 1, 2 * s2 + 1)) if anti else ((2 * s1, 2 * s2 + 1), (2 * s1 + 1, 2 * s2))):
+                out[(a, b)] = max(out.get((a, b), 0.0), L)
+        return out
+    def close_pairs(R):
+        """재방문 판정용: 가장 가까운 점끼리 R m 안인 두 구간 (끝점을 공유하는 인접 구간 제외)"""
+        even = PA % 2 == 0
+        pts, sg = PTS[even], SEG[PA[even]]
+        ends = {int(s['id']): {s['u'], s['v']} for s in segs}
+        out = set()
+        for i, j in cKDTree(pts).query_pairs(R):
+            s1, s2 = int(sg[i]), int(sg[j])
+            if s1 != s2 and not (ends[s1] & ends[s2]):
+                out.add((min(s1, s2), max(s1, s2)))
+        return sorted(out)
+    return HOUT, HIN, TWINS, near_pairs(tuple(near_r)), return_pairs(return_r), close_pairs(revisit_r)
 
 
 # ───────────────────────── 조립 + 캐시 ─────────────────────────
@@ -352,7 +395,7 @@ def build_network(data_dir: Path, p: Params = DEFAULT) -> Network:
 
     net = Network(allnodes=allnodes, segs=segs, nodes=nodes, arcs=arcs, U=U, V=V, SEG=SEG, REV=REV, Lm=Lm, vol=vol,
                   seg_routes=seg_routes, hw_w=hw_w, HOUT=np.zeros(NA), HIN=np.zeros(NA), TWINS={}, NEAR={}, base=base)
-    net.HOUT, net.HIN, net.TWINS, net.NEAR = _shape_features(net, p.NEAR_R)
+    net.HOUT, net.HIN, net.TWINS, net.NEAR, net.RET, net.CLOSE = _shape_features(net, p.NEAR_R, p.RETURN_R, p.REVISIT_R)
     net.route_vol, net.route_source = route_volumes(agg, data_dir, p.DAYTYPE)
     net.daytype = p.DAYTYPE
     net.stats = dict(교차로=len(nodes), 구간=len(segs), 총km=round(sum(s['length'] for s in segs) / 1000),

@@ -48,7 +48,7 @@ class Forbid(_Frozen):
 
 class Params(_Frozen):
     # 일정·통제 시간
-    T0: float = Field(8.0, ge=5.0, le=12.0, description='출발 시각(시)')
+    T0: float = Field(7.5, ge=5.0, le=12.0, description='출발 시각(시) — 2026 대회 풀코스 07:30 출발(책자 p17)')
     V_LEAD: float = 20.0
     V_SWEEP: float = 42.195 / 5.0
     PRE: float = 0.25
@@ -75,6 +75,11 @@ class Params(_Frozen):
     PEN_TWIN: float = 3.0
     PEN_NEAR: float = 2.0
     NEAR_R: tuple[float, float] = (300.0, 800.0)
+    NO_RETURN: bool = Field(True, description='회귀 금지(하드 제약): 반환 왕복·반대 차로·옆 길로 되돌아오기를 쓰지 않는다')
+    RETURN_R: float = Field(1000.0, description='회귀로 보는 거리(m): 이 거리 안에서 반대 방향으로 200m 이상 나란히 달리면 회귀 (머리핀·Z자 포함)')
+    REVISIT_R: float = Field(300.0, description='재방문으로 보는 거리(m): 코스의 두 지점이 이 거리 안이면')
+    REVISIT_GAP_KM: float = Field(2.0, description='코스상 이 거리(km)보다 떨어진 두 지점이 REVISIT_R 안에 오면 재방문(하드 금지)')
+    AREA_LIMIT: bool = Field(True, description='버스 정류장 데이터가 있는 영역(BBOX) 안의 도로만 쓴다 — 데이터 없는 곳을 피해 0으로 보이는 왜곡 방지')
     EPS_LEN: float = 0.02
     # 계산 설정
     STEP: float = 10.0
@@ -100,12 +105,12 @@ class Params(_Frozen):
 
 
 # 도로 그래프에 영향을 주는 값 — 바뀌면 네트워크를 다시 만든다(드묾)
-NETWORK_FIELDS = ('DAYTYPE', 'JUNCTION_R', 'NEAR_R')
+NETWORK_FIELDS = ('DAYTYPE', 'JUNCTION_R', 'NEAR_R', 'RETURN_R', 'REVISIT_R')
 # 피해 행렬 RID에 영향을 주는 값
 SCHEDULE_FIELDS = ('T0', 'V_LEAD', 'V_SWEEP', 'PRE', 'POST', 'STAGE', 'LMAX', 'STEP')
 
 DEFAULT = Params()
 # 노트북(v1)의 목적식: 노선 1개 = 60점, 우회 승객 미반영 — 회귀 테스트와 비교용
 LOTTE = Landmark(name='롯데월드타워', coord=(37.5126, 127.1025))       # 30km 이후 조망 ≥ 2km (노트북 v1의 정체성 조건)
-NOTEBOOK = Params(ALPHA=60.0, DETOUR_W=0.0, DAYTYPE='weekend', IDENTITY=(LOTTE,))
+NOTEBOOK = Params(ALPHA=60.0, DETOUR_W=0.0, DAYTYPE='weekend', IDENTITY=(LOTTE,), T0=8.0, NO_RETURN=False, AREA_LIMIT=False)
 MODEL_VERSION = 'v3'    # 목적식·데이터가 바뀌면 올린다 → 저장된 결과 캐시 키가 달라져 섞이지 않음

@@ -175,6 +175,20 @@ def validate_course(sc: Scenario, order, check_identity=True, check_endpoints=Tr
             errs.append(f'금지 구간 통과: {z.name} (반경 {z.r:g}m)')
     if any(sc.narrow[a] for a in order):
         errs.append('차로 수 부족 도로 사용')
+    if p.NO_RETURN:
+        used = set(order)
+        inv = {x for (a, b) in net.RET if a in used and b in used for x in (a, b)}       # 회귀 쌍에 들어간 arc
+        back = sum(net.Lm[x] for x in inv) / 2                                             # 갔다가 돌아온 길이 ≈ 관련 도로 길이의 절반
+        if back:
+            errs.append(f'회귀 구간 {back / 1000:.1f}km (반환 왕복·반대 방향으로 되돌아오기)')
+        pos, km = {}, 0.0
+        for a in order:
+            pos[int(net.SEG[a])] = km; km += net.Lm[a]
+        rv = [(s1, s2) for s1, s2 in net.CLOSE if s1 in pos and s2 in pos and abs(pos[s1] - pos[s2]) > p.REVISIT_GAP_KM * 1000 + 1e-6]
+        if rv:
+            errs.append(f'재방문 {len(rv)}곳 (코스상 {p.REVISIT_GAP_KM:g}km 넘게 떨어진 두 지점이 {p.REVISIT_R:g}m 안)')
+    if p.AREA_LIMIT and not all(sc.inside[a] for a in order):
+        errs.append('정류장 데이터 영역 밖 도로 사용')
     if check_identity:
         for k, lm in enumerate(p.IDENTITY):
             km, v = 0.0, 0.0

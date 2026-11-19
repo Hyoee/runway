@@ -57,7 +57,10 @@ def get_engine(version: str) -> Engine:             # version이 바뀌면(새 �
     if eng.cached(DEFAULT) is None:                 # 기본 시나리오 캐시가 없으면 노트북 결과로 채운다 (시작 시 긴 풀이 방지)
         import json
         r = json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))
-        eng.seed(DEFAULT, r['tobe']['order'], r['solver'])
+        try:
+            eng.seed(DEFAULT, r['tobe']['order'], r['solver'])
+        except Exception:                           # 노트북 코스가 현재 규칙(회귀 금지 등)을 어기면 시드하지 않음
+            pass
     return eng
 
 
@@ -84,7 +87,7 @@ if st.session_state.get('version') != VERSION:
     st.session_state['version'] = VERSION
 if 'sess' not in st.session_state:
     s = Session(engine=eng)
-    s.result = eng.solve(DEFAULT)                   # 기본 시나리오는 사전 계산되어 즉시
+    s.result = eng.solve(DEFAULT, time_limit=120, gap=0.02)   # 보통 사전 계산되어 즉시. 없으면 대화형 시간 제한으로 풀이
     st.session_state.update(sess=s, history=[], chat=[])
 S: Session = st.session_state.sess
 TOOLS = {t.name: t for t in make_tools(S)}

@@ -14,6 +14,7 @@ from runway import Scenario, ScenarioError, build_asis, evaluate, kpis, load_net
 from runway.params import NOTEBOOK as DEFAULT          # 노트북(v1) 목적식으로 회귀 비교
 from runway.params import DEFAULT as V3                # 서비스 기본값 (일요일 수요 + 실측 노선 우회)
 from runway.evaluate import objective
+from runway.asis import ASIS_WP, ASIS_WP_V1, frozen_asis, load_frozen
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULT = json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))
@@ -49,7 +50,7 @@ def test_scenario_matches_notebook(sc):          # Step 4·5-0 출력
 
 
 def test_asis_kpis(sc):                          # Step 6 출력
-    order, chk = build_asis(sc)
+    order, chk = build_asis(sc, ASIS_WP_V1)          # 노트북 v1 경유지
     assert order == RESULT['asis']['order']
     expect = {'length_km': 43.163, 'riders': 32110, 'routes': 156, 'stops': 157, 'view_m': 1168, 'late_km': 29.6,
               'closure_kmh': 91, 'junctions': 57, 'turns': 21, 'sharp': 6, 'backtrack_km': 5.9}
@@ -67,7 +68,7 @@ def test_saved_tobe_kpis_and_valid(sc):          # Step 9 TO-BE (저장된 코�
 
 
 def test_asis_violates_rules(sc):                # AS-IS는 TO-BE의 규칙(길이·왕복·금지 구간)을 어긴다 — 문제점 지적의 근거
-    errs = validate_course(sc, build_asis(sc)[0], check_identity=False, check_endpoints=False)
+    errs = validate_course(sc, build_asis(sc, ASIS_WP_V1)[0], check_identity=False, check_endpoints=False)
     assert any('길이' in e for e in errs) and any('왕복' in e for e in errs) and any('건국대병원' in e for e in errs)
 
 
@@ -80,8 +81,8 @@ def test_milp_objective_equals_recomputation(net, net_v3, version):
     """경로가 하나뿐인 회랑(저장된 코스의 arc만)에서 MILP를 풀면, 솔버 목적함수 = objective() 재계산이어야 한다.
     → 모델 수식과 재계산 함수가 같은 식임을 v1(노트북)·v3(일요일 수요 + 실측 노선 우회 승객) 모두에서 확인"""
     sc_ = {'v1': lambda: Scenario(net, DEFAULT),                              # 노트북 (노선 1개 = 60점)
-           'v3': lambda: Scenario(net_v3, V3),                                 # 서비스 기본: 일요일 수요, 못 타는 승객만
-           'v3-detour': lambda: Scenario(net_v3, V3.with_(DETOUR_W=0.2))}[version]()   # 선택: 우회 노선 영향 반영
+           'v3': lambda: Scenario(net_v3, V3.with_(NO_RETURN=False, AREA_LIMIT=False)),   # 서비스 목적식 (노트북 코스는 회귀 규칙을 어겨 규칙만 끔 — 식 비교용)
+           'v3-detour': lambda: Scenario(net_v3, V3.with_(DETOUR_W=0.2, NO_RETURN=False, AREA_LIMIT=False))}[version]()
     order = RESULT['tobe']['order']
     corridor = sorted(set(order) | {int(net.REV[a]) for a in order})   # 반대 방향 포함(쌍 벌점 판정용) — 경로는 여전히 하나
     out, info = solve_milp(sc_, corridor, time_limit=60)
@@ -137,3 +138,17 @@ def test_full_optimize(sc):
     order, info, _ = optimize(sc)
     assert order is not None and validate_course(sc, order) == []
     assert info['목적함수'] <= 38336 * (1 + DEFAULT.GAP) + 1          # 노트북 해와 gap 1% 이내
+
+
+def test_asis_frozen_official(net_v3):
+    """AS-IS는 공식 코스로 고정 — 파일이 있고, 공식 경유지 순서·반환 구간을 담고, 경유지에서 다시 만든 것과 같다"""
+    fz = load_frozen(ROOT / 'data')
+    assert fz is not None, 'data/asis_2026_official.json 없음'
+    assert fz['official_waypoints'] == [
+        '광화문광장(출발)', '숭례문 오거리', '한국은행 앞 사거리', '시청 삼거리', '을지로1가', '대림상가(반환)', '을지로2가',
+        '비우당교(반환)', '모전교', '종로구청입구 교차로', '신설동 오거리', '군자역', '건대입구역', '자양사거리', '석촌호수사거리',
+        '학원사거리', '학여울역(반환)', '수서IC', '둔촌사거리(반환)', '올림픽공원(도착)']
+    sc_ = Scenario(net_v3, V3)
+    order, _ = frozen_asis(sc_, ROOT / 'data')
+    assert order == build_asis(sc_, ASIS_WP)[0]                 # 경유지 정의와 고정본이 일치
+    assert evaluate(sc_, order)['backtrack_km'] > 0            # 공식 코스에는 반환(회귀) 구간이 있다

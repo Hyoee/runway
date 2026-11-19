@@ -13,7 +13,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from .asis import build_asis
+from .asis import frozen_asis
 from .evaluate import evaluate, kpis, objective, road_table, to_geojson_feature, validate_course
 from .network import load_network
 from .params import DEFAULT, MODEL_VERSION, NETWORK_FIELDS, Params
@@ -52,7 +52,7 @@ def describe_params(p: Params) -> str:
         out.append('우회 영향 미반영 (못 타는 승객만)' if p.DETOUR_W == 0 else f'우회 가중치 δ={p.DETOUR_W:g}')
     if p.DAYTYPE != d.DAYTYPE:
         out.append({'weekend': '수요: 토·일 평균', 'all': '수요: 전체 일평균', 'sunday': '수요: 일요일 평균'}[p.DAYTYPE])
-    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 일요일 08:00)'
+    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 일요일 07:30)'
 
 
 class Engine:
@@ -105,7 +105,7 @@ class Engine:
     def asis(self, p: Params = DEFAULT) -> dict:
         """AS-IS(2026 JTBC 코스)를 조건 p(출발 시각 등)로 평가. 출발·도착은 공식 코스 그대로."""
         sc = self.scenario(p.with_(START=DEFAULT.START, FINISH=DEFAULT.FINISH))
-        order, chk = build_asis(sc)
+        order, chk = frozen_asis(sc, self.data_dir)          # 고정된 공식 코스 (data/asis_2026_official.json)
         out = self.package(sc, order, 'AS-IS')
         out['km_check'] = chk
         return out
@@ -156,22 +156,25 @@ class Engine:
             n += 1
         return n
 
-    def cross_seed(self) -> int:
-        """저장된 해를 서로의 조건에 대입해 본다 — 더 엄격한 조건에서 찾은 해가 느슨한 조건에서도 더 좋을 수 있다
-        (노트북 Step 8의 '찾은 해 중 조건을 만족하는 최선' 규칙). 교체된 개수를 돌려준다."""
+    def cross_seed(self, targets=()) -> int:
+        """저장된 해를 서로의 조건에 대입해 본다 — 다른 조건에서 찾은 해가 이 조건에서도 더 좋을 수 있다
+        (노트북 Step 8의 '찾은 해 중 조건을 만족하는 최선' 규칙). targets: 결과가 아직 없는 조건도 채운다. 교체 개수 반환."""
         lib, n = self.library(), 0
-        for tgt in lib:
+        tg = [x['params'] for x in lib] + [p for p in targets if all(p != x['params'] for x in lib)]
+        for tp in tg:
             for src in lib:
-                if src is tgt:
-                    continue
                 try:
-                    sc = self.scenario(tgt['params'])
+                    sc = self.scenario(tp)
                     res = self.package(sc, src['order'], 'TO-BE', dict(solver='cross-seed', 출처=src['조건']))
                 except ScenarioError:
                     continue
-                if not res['violations'] and self._save_if_better(tgt['params'], res) is res:
+                if not res['violations'] and self._save_if_better(tp, res) is res:
                     n += 1
         return n
+
+    def known_orders(self):
+        """저장된 모든 코스의 arc — 새 풀이의 후보 회랑에 항상 넣는다(회랑이 좁아 좋은 코스를 놓치지 않게)"""
+        return sorted({int(a) for x in self.library() for a in x['order']})
 
     def seed(self, p: Params, order, info: dict, name='TO-BE') -> dict:
         """다른 곳에서 구한 해(노트북 결과 등)를 캐시에 넣는다 — 제약 검사를 통과해야만"""
@@ -192,7 +195,7 @@ class Engine:
             t0 = time.time()
             prev = self.cached(p)
             order, info, _ = optimize(sc, time_limit=time_limit, gap=gap, progress=progress,
-                                      extra=prev['order'] if prev else ())
+                                      extra=set(prev['order'] if prev else ()) | set(self.known_orders()))
         except ScenarioError as e:
             return dict(ok=False, reason=str(e))
         if order is None:

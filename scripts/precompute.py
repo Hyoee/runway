@@ -23,8 +23,9 @@ from runway import DEFAULT, Engine, ScenarioError  # noqa: E402
 PASSENGER_FIRST = DEFAULT.with_(TURN=tuple(t * 0.5 for t in DEFAULT.TURN))
 
 SCENARIOS = {                                   # 이름: 조건 (앱 사이드바 버튼·챗봇이 즉시 답하는 결과)
-    '기본(일요일 08:00)': DEFAULT,
+    '기본(일요일 07:30)': DEFAULT,
     '출발 07:00': DEFAULT.with_(T0=7.0),
+    '출발 08:00': DEFAULT.with_(T0=8.0),
     '출발 09:00': DEFAULT.with_(T0=9.0),
     '꺾임 덜 중시(벌점 ×0.5)': PASSENGER_FIRST,
     '단순성 우선(벌점 ×2)': DEFAULT.with_(TURN=tuple(t * 2 for t in DEFAULT.TURN)),
@@ -63,7 +64,7 @@ def main():
     a = ap.parse_args()
     eng = Engine(ROOT)
     if a.refresh:
-        print('재평가:', eng.refresh_store(), '개 | cross-seed 교체:', eng.cross_seed(), '개')
+        print('재평가:', eng.refresh_store(), '개 | cross-seed 교체:', eng.cross_seed(SCENARIOS.values()), '개')
     else:
         seed_all(eng)
         if not a.seed:
@@ -75,7 +76,7 @@ def main():
                 k = out.get('kpi', {})
                 print(f"[{name}] ok={out['ok']} {time.time()-t0:.0f}초 | 시민영향 {k.get('citizen_impact')} 못탐 {k.get('riders')} "
                       f"노선 {k.get('routes')} 목적함수 {out.get('objective')} {out.get('reason', '')}", flush=True)
-            print('cross-seed 교체:', eng.cross_seed(), '개')
+            print('cross-seed 교체:', eng.cross_seed(SCENARIOS.values()), '개')
     for x in eng.library():
         k = x['kpi']
         print(f"  {x['조건']}: 못 타는 승객 {k['riders']:,} 정류장 {k['stops']} 노선 {k['routes']} 전환 {k['turns']} "

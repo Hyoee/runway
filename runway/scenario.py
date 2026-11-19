@@ -134,7 +134,14 @@ class Scenario:
 
     @property
     def OK_A(self) -> np.ndarray:
-        return (self.lo_a <= self.hi_a) & ~self.FORB
+        ok = (self.lo_a <= self.hi_a) & ~self.FORB
+        return ok & self.inside if self.p.AREA_LIMIT else ok
+
+    @cached_property
+    def inside(self) -> np.ndarray:
+        """arc의 모든 점이 정류장 데이터 영역(BBOX) 안인가"""
+        net = self.net
+        return np.array([all(in_bbox(net.allnodes[n]) for n in net.segs[net.SEG[a]]['path']) for a in range(net.NA)], dtype=bool)
 
     def check_feasible_basics(self):
         """솔버를 돌리기 전에 확실히 안 되는 조건을 빠르게 거른다"""

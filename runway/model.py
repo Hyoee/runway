@@ -119,6 +119,18 @@ def build_milp(sc: Scenario, A, relax=False, identity_L=None):
         r_ = int(REV[a])
         if r_ in Aset and a < r_:
             prob += x[a] + x[r_] <= 1                                                                        # (8)
+    if P.NO_RETURN:                                                                                          # (12) 회귀 금지
+        for (a, b) in net.RET:                                                                               #  반대 방향으로 나란히 달리는 두 arc는
+            if a in Aset and b in Aset:                                                                      #  함께 쓸 수 없다 (반환 왕복·옆 길 되돌아오기)
+                prob += x[a] + x[b] <= 1
+        # (13) 재방문 금지: 300m 안의 두 구간을 모두 쓰면, 코스상 위치 차이가 REVISIT_GAP_KM 이하여야 한다 (고리·되돌아오기 방지)
+        #   구간 s의 위치 Ps = p_{2s} + p_{2s+1} (안 쓰는 arc의 p는 0), 사용 여부 Xs ∈ {0,1}
+        G, M = P.REVISIT_GAP_KM * 1000, P.LMAX
+        Ps = {s_: pulp.lpSum(p[a] for a in As) for s_, As in segA.items()}
+        for (s1, s2) in net.CLOSE:
+            if s1 in segA and s2 in segA:
+                prob += Ps[s1] - Ps[s2] <= G + M * (2 - Xs[s1] - Xs[s2])
+                prob += Ps[s2] - Ps[s1] <= G + M * (2 - Xs[s1] - Xs[s2])
     Ltot = pulp.lpSum(float(Lm[a]) * x[a] for a in A)
     prob += Ltot >= P.LMIN; prob += Ltot <= P.LMAX                                                           # (4)
     byA = {}

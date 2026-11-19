@@ -106,7 +106,7 @@ def make_tools(s: Session) -> list:
             forbidden_radius_m: 금지 반경(m), 기본 150
             clear_forbidden: True면 기존 금지 구간을 모두 해제
             simplicity: 방향 전환 벌점 배율. 1이 기본, 2면 꺾임을 두 배로 싫어함(더 단순한 코스), 0.5면 덜 신경 씀
-            reset: True면 모든 조건을 기본값(광화문→올림픽공원, 일요일 08:00)으로 되돌린 뒤 나머지 값을 적용
+            reset: True면 모든 조건을 기본값(광화문→올림픽공원, 일요일 07:30)으로 되돌린 뒤 나머지 값을 적용
         """
         args = {k: v for k, v in dict(start_place=start_place, finish_place=finish_place, start_hour=start_hour,
                                       add_forbidden_place=add_forbidden_place, clear_forbidden=clear_forbidden,
