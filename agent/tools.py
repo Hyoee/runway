@@ -85,6 +85,42 @@ def _resolve(s: Session, query: str, area=None):
                       후보=[h['name'] for h in c])
 
 
+def build_params(s: Session, event=None, start_place=None, finish_place=None, start_hour=None, avoid_places=(), radius=150.0,
+                 clear_forbidden=False, simplicity=None, reset=False):
+    """조건표 → Params (채팅 도구와 ① 목표 입력 화면이 같은 경로로 검증). 반환: (Params, None) 또는 (None, 오류 dict)
+    장소는 정류소 위치 데이터에서만 찾는다 — 없거나 애매하면 오류와 후보를 돌려준다."""
+    ev_key = s.params.EVENT
+    if event:
+        ev_key = event if event in EVENTS else parse_event(event)
+        if ev_key is None:
+            return None, dict(error=f"종목 '{event}'를 알 수 없습니다. 풀코스·하프·10K 중에서 고르세요.")
+    p = params_for(ev_key) if (reset or ev_key != s.params.EVENT) else s.params
+    upd = {}
+    for key, nm_key, q in (('START', 'START_NAME', start_place), ('FINISH', 'FINISH_NAME', finish_place)):
+        if q and q != getattr(p, nm_key):
+            hit, err = _resolve(s, q, p.AREA)
+            if err:
+                return None, dict(항목='출발지' if key == 'START' else '도착지', **err)
+            upd[key], upd[nm_key] = hit['coord'], hit['name']
+    if start_hour is not None:
+        upd['T0'] = float(start_hour)
+    forb = () if clear_forbidden else tuple(p.FORBID)
+    for q in avoid_places or ():
+        hit, err = _resolve(s, q, p.AREA)
+        if err:
+            return None, dict(항목=f'피할 장소({q})', **err)
+        if all(z.name != hit['name'] for z in forb):
+            forb += (Forbid(name=hit['name'], coord=hit['coord'], r=radius),)
+    if clear_forbidden or avoid_places:
+        upd['FORBID'] = forb
+    if simplicity is not None:
+        upd['TURN'] = tuple(t * float(simplicity) for t in DEFAULT.TURN)
+    try:
+        return p.with_(**upd), None
+    except Exception as e:                         # 스키마 검증 실패 (범위 밖 값 등)
+        return None, dict(error=f'조건 값이 허용 범위를 벗어났습니다: {e}')
+
+
 def make_tools(s: Session) -> list:
     def record(name, args, out):
         s.log.append(dict(tool=name, args=args, result=out))
@@ -121,35 +157,11 @@ def make_tools(s: Session) -> list:
         args = {k: v for k, v in dict(event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour,
                                       add_forbidden_place=add_forbidden_place, clear_forbidden=clear_forbidden,
                                       simplicity=simplicity, reset=reset).items() if v not in (None, False)}
-        ev_key = s.params.EVENT
-        if event:
-            ev_key = event if event in EVENTS else parse_event(event)
-            if ev_key is None:
-                return record('optimize_course', args, dict(ok=False, error=f"종목 '{event}'를 알 수 없습니다. 풀코스·하프·10K 중에서 고르세요."))
-        p = params_for(ev_key) if (reset or ev_key != s.params.EVENT) else s.params
-        upd = {}
-        for key, nm_key, q in (('START', 'START_NAME', start_place), ('FINISH', 'FINISH_NAME', finish_place)):
-            if q:
-                hit, err = _resolve(s, q, p.AREA)
-                if err:
-                    return record('optimize_course', args, dict(ok=False, **err))
-                upd[key], upd[nm_key] = hit['coord'], hit['name']
-        if start_hour is not None:
-            upd['T0'] = float(start_hour)
-        forb = () if clear_forbidden else tuple(p.FORBID)
-        if add_forbidden_place:
-            hit, err = _resolve(s, add_forbidden_place, p.AREA)
-            if err:
-                return record('optimize_course', args, dict(ok=False, **err))
-            forb += (Forbid(name=hit['name'], coord=hit['coord'], r=forbidden_radius_m),)
-        if clear_forbidden or add_forbidden_place:
-            upd['FORBID'] = forb
-        if simplicity is not None:
-            upd['TURN'] = tuple(t * float(simplicity) for t in DEFAULT.TURN)
-        try:
-            newp = p.with_(**upd)
-        except Exception as e:                     # 스키마 검증 실패 (범위 밖 값 등)
-            return record('optimize_course', args, dict(ok=False, error=f'조건 값이 허용 범위를 벗어났습니다: {e}'))
+        newp, err = build_params(s, event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour,
+                                 avoid_places=[add_forbidden_place] if add_forbidden_place else [], radius=forbidden_radius_m,
+                                 clear_forbidden=clear_forbidden, simplicity=simplicity, reset=reset)
+        if err:
+            return record('optimize_course', args, dict(ok=False, **err))
         s.progress(f'조건: {describe_params(newp)}')
         res = s.engine.solve(newp, time_limit=INTERACTIVE_TIME_LIMIT, gap=INTERACTIVE_GAP, progress=s.progress)
         if not res['ok']:

@@ -135,7 +135,11 @@ class Scenario:
     @property
     def OK_A(self) -> np.ndarray:
         ok = (self.lo_a <= self.hi_a) & ~self.FORB
-        return ok & self.inside if self.p.AREA_LIMIT else ok
+        ok = ok & self.inside if self.p.AREA_LIMIT else ok
+        ex = getattr(self, 'extra_forbid', None)          # 반사실 분석: 특정 도로를 빼고 다시 풀 때
+        if ex:
+            ok = ok & ~np.isin(self.net.SEG, list(ex))
+        return ok
 
     @cached_property
     def inside(self) -> np.ndarray:

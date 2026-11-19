@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -202,6 +203,40 @@ class Engine:
         if res['violations']:
             raise ScenarioError(f'제약 위반으로 저장하지 않음: {res["violations"]}')
         return self._save_if_better(p, res)
+
+    # ── 반사실 분석: "이 도로를 빼면?" ──
+    def _cf_path(self, p: Params, road: str, base: dict) -> Path:
+        h = hashlib.sha1(f"{problem_key(p)}|{road}|{base['order']}".encode()).hexdigest()[:12]
+        d = self.store / 'counterfactual'; d.mkdir(exist_ok=True)
+        return d / f'cf-{h}.json'
+
+    def cached_counterfactual(self, p: Params, road: str, base: dict) -> dict | None:
+        f = self._cf_path(p, road, base)
+        return json.load(open(f, encoding='utf-8')) if f.exists() else None
+
+    def counterfactual(self, p: Params, road: str, base: dict, time_limit=90, gap=0.02, progress=None) -> dict:
+        """현재 TO-BE에서 이름이 road인 도로 구간을 모두 금지하고 다시 푼다.
+        반환: 새 결과(package) + 변화량 — '왜 이 길인가'에 대한 수치 근거. 결과는 scenarios/counterfactual/에 저장(즉시 재사용)"""
+        if (hit := self.cached_counterfactual(p, road, base)):
+            return hit
+        net = self.network(p)
+        segs = {int(net.SEG[a]) for a in base['order'] if net.segs[net.SEG[a]]['name'] == road}
+        if not segs:
+            return dict(ok=False, reason=f"현재 코스에 '{road}' 구간이 없습니다")
+        sc = Scenario(net, p)                           # 캐시된 Scenario를 바꾸지 않도록 새로 만든다
+        sc.extra_forbid = segs
+        order, info, _ = optimize(sc, time_limit=time_limit, gap=gap, progress=progress,
+                                  extra=set(self.known_orders(p)) - {a for a in range(net.NA) if int(net.SEG[a]) in segs})
+        if order is None:
+            return dict(ok=False, reason=f"'{road}' 없이는 조건을 만족하는 코스가 없습니다 ({info.get('해 종류')})", road=road)
+        res = self.package(sc, order, f'TO-BE ({road} 제외)', info)
+        b, n = base['kpi'], res['kpi']
+        res.update(ok=True, road=road, removed_km=round(sum(net.segs[s]['length'] for s in segs) / 1000, 2),
+                   delta={k: (n[k] - b[k]) if isinstance(n[k], int) else round(n[k] - b[k], 3)
+                          for k in ('riders', 'stops', 'routes', 'turns', 'length_km')})
+        with open(self._cf_path(p, road, base), 'w', encoding='utf-8') as fh:
+            json.dump(res, fh, ensure_ascii=False, default=float)
+        return res
 
     # ── 최적화 ──
     def solve(self, p: Params, time_limit=None, gap=None, progress=None, use_cache=True) -> dict:
