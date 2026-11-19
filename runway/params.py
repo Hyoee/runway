@@ -61,10 +61,8 @@ class Params(_Frozen):
     FINISH: LatLon = (37.5207, 127.1214)         # 올림픽공원
     START_NAME: str = '광화문광장'
     FINISH_NAME: str = '올림픽공원'
-    # 대회 정체성·금지 구간
-    IDENTITY: tuple[Landmark, ...] = (
-        Landmark(name='롯데월드타워', coord=(37.5126, 127.1025)),
-    )
+    # 대회 정체성(랜드마크 조망 하한) — 서비스 기본은 없음. 노트북 v1은 롯데월드타워(LOTTE)
+    IDENTITY: tuple[Landmark, ...] = ()
     FORBID: tuple[Forbid, ...] = (
         Forbid(name='건국대병원 앞(응급 동선)', coord=(37.5404, 127.0718), r=150),
     )
@@ -108,5 +106,6 @@ SCHEDULE_FIELDS = ('T0', 'V_LEAD', 'V_SWEEP', 'PRE', 'POST', 'STAGE', 'LMAX', 'S
 
 DEFAULT = Params()
 # 노트북(v1)의 목적식: 노선 1개 = 60점, 우회 승객 미반영 — 회귀 테스트와 비교용
-NOTEBOOK = Params(ALPHA=60.0, DETOUR_W=0.0, DAYTYPE='weekend')
+LOTTE = Landmark(name='롯데월드타워', coord=(37.5126, 127.1025))       # 30km 이후 조망 ≥ 2km (노트북 v1의 정체성 조건)
+NOTEBOOK = Params(ALPHA=60.0, DETOUR_W=0.0, DAYTYPE='weekend', IDENTITY=(LOTTE,))
 MODEL_VERSION = 'v3'    # 목적식·데이터가 바뀌면 올린다 → 저장된 결과 캐시 키가 달라져 섞이지 않음

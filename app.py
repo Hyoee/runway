@@ -103,15 +103,11 @@ with st.sidebar:
         start = st.text_input('출발지', p.START_NAME)
         finish = st.text_input('도착지', p.FINISH_NAME)
         t0 = st.slider('출발 시각', 6.0, 10.0, float(p.T0), 0.5, format='%.1f시')
-        view = st.slider('30km 이후 롯데월드타워 조망 하한 (km)', 0.0, 4.0,
-                         float(p.IDENTITY[0].L / 1000) if p.IDENTITY else 0.0, 0.5)
         simple = st.select_slider('코스 단순성 (꺾임 벌점 배율)', [0.5, 1.0, 2.0, 3.0], value=round(p.TURN[0] / DEFAULT.TURN[0], 1)
                                   if round(p.TURN[0] / DEFAULT.TURN[0], 1) in (0.5, 1.0, 2.0, 3.0) else 1.0)
-        dw = st.select_slider('고급: 우회 노선 영향 가중치 δ (0 = 못 타는 승객만)', [0.0, 0.1, 0.2, 0.3, 0.5],
-                              value=p.DETOUR_W if p.DETOUR_W in (0.0, 0.1, 0.2, 0.3, 0.5) else 0.0)
         go = st.form_submit_button('최적 코스 계산', type='primary', width='stretch')
     if go:
-        kw = dict(start_hour=t0, view_min_km=view, simplicity=simple, detour_weight=dw)
+        kw = dict(start_hour=t0, simplicity=simple)
         if start != p.START_NAME:
             kw['start_place'] = start
         if finish != p.FINISH_NAME:
@@ -135,10 +131,9 @@ with st.sidebar:
 
     st.divider()
     st.subheader('미리 계산된 시나리오')
-    lib = eng.library()
+    lib = sorted(eng.library(), key=lambda x: (x['params'] != DEFAULT, x['kpi']['riders']))   # 기본 조건 먼저
     for i, x in enumerate(lib):
-        lab_ = (f"시민 영향 {x['kpi']['citizen_impact']:,}명" if x['params'].DETOUR_W > 0 else f"못 타는 승객 {x['kpi']['riders']:,}명")
-        if st.button(f"{x['조건']} — {lab_}", key=f'lib{i}', width='stretch'):
+        if st.button(f"{x['조건']} — 못 타는 승객 {x['kpi']['riders']:,}명", key=f'lib{i}', width='stretch'):
             S.params, S.result = x['params'], dict(eng.cached(x['params']), ok=True, cached=True)
             st.rerun()
     st.divider()
@@ -158,27 +153,22 @@ with left:
     st.caption(f"현재 조건: {describe_params(S.params)}")
     k, a = R['kpi'], A['kpi']
     cols = st.columns(5)
-    tiles = [('못 타는 승객 (명)', 'riders', '정류장이 마라톤 코스에 들어가 통제 시간 동안 버스를 못 타는 승객 (일요일 하루 기준) — 최적화가 줄이는 값'),
-             ('방향 전환 45°↑', 'turns', '러너가 외우기 쉬운 단순한 코스일수록 적음 — 최적화 벌점'),
-             ('왕복 회귀 (km)', 'backtrack_km', '달려온 길을 되돌아오는 거리 — 최적화 벌점'),
-             ('영향 노선 (참고)', 'routes', '코스 위에 정류장이 있는 노선 수 — 최적화에는 쓰지 않는 참고 지표'),
-             ('우회 노선 이용객 (참고)', 'detour_riders', '통제 시간 동안 우회하는 노선 전체의 이용객 — 참고 지표 (δ>0이면 최적화에 반영)')]
-    if S.params.DETOUR_W > 0:
-        tiles[0] = ('시민 영향 (명)', 'citizen_impact', f'못 타는 승객 + {S.params.DETOUR_W:g}×우회 노선 이용객 — 최적화가 줄이는 값')
+    tiles = [('못 타는 승객 (명)', 'riders', '정류장이 마라톤 코스에 들어가 통제 시간 동안 버스를 못 타는 승객 (일요일 하루 기준)'),
+             ('통제되는 정류장', 'stops', '코스 위에 있어 통제 시간 동안 쓸 수 없는 버스 정류장 수'),
+             ('영향 버스 노선', 'routes', '코스 위에 정류장이 있는 버스 노선 수'),
+             ('방향 전환 45°↑', 'turns', '러너가 외우기 쉬운 단순한 코스일수록 적음'),
+             ('통제 필요 교차로', 'junctions', '코스가 지나가 통제 인력이 필요한 교차로 수')]
     for c, (lab, key_, hlp) in zip(cols, tiles):
-        if key_ not in k or key_ not in a:
-            continue
         d = k[key_] - a[key_]
         pct = f' ({d / a[key_] * 100:+.0f}%)' if a[key_] else ''
         c.metric(lab, f'{k[key_]:,}', f'{d:+,}{pct}' if d else '변화 없음', delta_color='inverse', help=hlp)
-    st.caption('변화는 AS-IS(2026 JTBC 코스) 대비 · 승객 기준: 정류장이 코스에 들어가 버스를 못 타는 승객'
-               + (f' + {S.params.DETOUR_W:g}×우회 노선 이용객' if S.params.DETOUR_W > 0 else ''))
+    st.caption('변화는 AS-IS(2026 JTBC 코스) 대비')
 
     # 지도
     def path_rows(res, name, color):
         coords = res['geojson']['geometry']['coordinates']
         rgb = [int(color[i:i + 2], 16) for i in (1, 3, 5)]
-        return dict(name=name, path=coords, color=rgb, info=f"{name}: {res['kpi']['length_km']}km, 승객 피해 {res['kpi']['riders']:,}명")
+        return dict(name=name, path=coords, color=rgb, info=f"{name}: {res['kpi']['length_km']}km, 못 타는 승객 {res['kpi']['riders']:,}명")
     show = st.radio('지도에 표시', ['둘 다', 'TO-BE만', 'AS-IS만'], horizontal=True, label_visibility='collapsed')
     paths = ([path_rows(A, 'AS-IS', C_ASIS)] if show != 'TO-BE만' else []) + ([path_rows(R, 'TO-BE', C_TOBE)] if show != 'AS-IS만' else [])
     pts = [dict(name=f'출발 · {S.params.START_NAME}', pos=[S.params.START[1], S.params.START[0]], color=[11, 11, 11]),
@@ -206,31 +196,18 @@ with left:
     with t1:
         rows = []
         for lab, key_, lower in KPI_LABELS:
-            if key_ == 'citizen_impact' and S.params.DETOUR_W == 0:       # δ=0이면 못 타는 승객과 같은 값
-                continue
             av, tv = a[key_], k[key_]
             better = None if lower is None or av == tv else ((tv < av) == lower)
             rows.append({'지표': lab, 'AS-IS': av, 'TO-BE': tv, '변화': f'{(tv - av) / av * 100:+.0f}%' if av else '–',
                          '판정': '' if better is None else ('개선' if better else '악화')})
         st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
-        sv = R.get('solver', {})
-        obj = R.get('objective')
-        st.caption(f"TO-BE 풀이: {sv.get('solver', '-')} · {sv.get('해 종류', sv.get('상태', '-'))} · 목적함수 {'-' if obj is None else f'{obj:,}'}"
-                   + (' · 저장된 결과' if R.get('cached') else ''))
     with t2:
-        st.dataframe(pd.DataFrame(R['roads']), hide_index=True, width='stretch')
-        st.caption('피해 = 해당 도로 통제 시간 동안 그 도로 정류장에서 버스를 타지 못하는 승객(일요일 하루 기준)')
+        st.dataframe(pd.DataFrame(R['roads']).rename(columns={'피해': '못 타는 승객'}), hide_index=True, width='stretch')
     with t3:
-        st.caption('우회 시간 동안 그 노선 전체를 이용하는 승객 추정 — 노선 수보다 이 값이 실제 영향의 크기에 가깝습니다')
         c1, c2 = st.columns(2)
         for col, res, nm in ((c1, R, 'TO-BE'), (c2, A, 'AS-IS')):
-            rd = res.get('route_detour') or {}
-            col.markdown(f"**{nm} · {len(res['route_list'])}개 노선 · 우회 이용객 {res['kpi'].get('detour_riders', 0):,}명**")
-            if rd:
-                col.dataframe(pd.DataFrame([{'노선': r, '우회 중 이용객(명)': v} for r, v in rd.items()]), hide_index=True,
-                              width='stretch', height=320)
-            else:
-                col.write(', '.join(res['route_list']))
+            col.markdown(f"**{nm} · {len(res['route_list'])}개 노선**")
+            col.write(', '.join(res['route_list']))
     with t4:
         for v in A['violations']:
             st.markdown(f'- {v}')
@@ -244,7 +221,7 @@ with right:
     with box:
         if not st.session_state.chat:
             st.info('예) "출발을 7시로 당기면?" · "건대입구역 근처는 피해 줘" · "기존 코스는 뭐가 문제야?" · '
-                    '"도착을 잠실종합운동장으로 바꾸고 조망 조건은 빼 줘"')
+                    '"도착을 잠실종합운동장으로 바꿔 줘"')
         for m in st.session_state.chat:
             with st.chat_message(m['role']):
                 st.markdown(m['content'])

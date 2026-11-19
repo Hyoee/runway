@@ -8,21 +8,17 @@ import pandas as pd
 
 from .scenario import Scenario
 
-KPI_LABELS = [  # (표시 이름, 키, 낮을수록 좋은가)
-    ('코스 길이 (km)', 'length_km', None),
-    ('못 타는 승객, 통제 시간 중 (명/대회일)', 'riders', True),
-    ('시민 영향 = 못 타는 승객 + δ×우회 이용객 (명)', 'citizen_impact', True),
-    ('영향 받는 버스 노선 (개)', 'routes', True),
-    ('우회 노선 이용객, 통제 시간 중 (명, 추정)', 'detour_riders', True),
+KPI_LABELS = [  # 화면·보고에 쓰는 핵심 KPI (표시 이름, 키, 낮을수록 좋은가)
+    ('못 타는 승객 (명/일요일)', 'riders', True),
+    ('km당 못 타는 승객 (명/km)', 'riders_per_km', True),
     ('통제되는 정류장 (곳)', 'stops', True),
-    ('도로 통제 부담 (km×시간)', 'closure_kmh', True),
-    ('통제 필요 교차로 (곳)', 'junctions', True),
-    ('10시 이후까지 막히는 도로 (km)', 'late_km', True),
-    ('랜드마크 조망, 정체성 구간 (km)', 'view_km', False),
+    ('영향 받는 버스 노선 (개)', 'routes', True),
     ('방향 전환 45°↑ (회)', 'turns', True),
     ('급한 방향 전환 100°↑ (회)', 'sharp', True),
-    ('왕복 회귀 (km)', 'backtrack_km', True),
-    ('km당 승객 피해 (명/km)', 'riders_per_km', True),
+    ('통제 필요 교차로 (곳)', 'junctions', True),
+    ('도로 통제 부담 (km×시간)', 'closure_kmh', True),
+    ('10시 이후까지 막히는 도로 (km)', 'late_km', True),
+    ('코스 길이 (km)', 'length_km', None),
 ]
 
 

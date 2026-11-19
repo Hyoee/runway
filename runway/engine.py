@@ -52,7 +52,7 @@ def describe_params(p: Params) -> str:
         out.append('우회 영향 미반영 (못 타는 승객만)' if p.DETOUR_W == 0 else f'우회 가중치 δ={p.DETOUR_W:g}')
     if p.DAYTYPE != d.DAYTYPE:
         out.append({'weekend': '수요: 토·일 평균', 'all': '수요: 전체 일평균', 'sunday': '수요: 일요일 평균'}[p.DAYTYPE])
-    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 일요일 08:00, 롯데타워 조망≥2km)'
+    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 일요일 08:00)'
 
 
 class Engine:

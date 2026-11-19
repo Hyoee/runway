@@ -20,28 +20,21 @@ sys.stdout.reconfigure(encoding='utf-8')
 from runway import DEFAULT, Engine, ScenarioError  # noqa: E402
 
 
-def lotte(L):
-    return (DEFAULT.IDENTITY[0].model_copy(update={'L': L}),)
-
-
 PASSENGER_FIRST = DEFAULT.with_(TURN=tuple(t * 0.5 for t in DEFAULT.TURN))
 
-SCENARIOS = {                                   # 이름: 조건 (데모·파레토·일정·가중치 질문에 바로 답하기 위한 것)
-    '기본(일요일 08:00, 조망≥2km, 못 타는 승객 최소)': DEFAULT,
-    '조망 하한 0km': DEFAULT.with_(IDENTITY=lotte(0.0)),
-    '조망 하한 1km': DEFAULT.with_(IDENTITY=lotte(1000.0)),
-    '조망 하한 3km': DEFAULT.with_(IDENTITY=lotte(3000.0)),
+SCENARIOS = {                                   # 이름: 조건 (앱 사이드바 버튼·챗봇이 즉시 답하는 결과)
+    '기본(일요일 08:00)': DEFAULT,
     '출발 07:00': DEFAULT.with_(T0=7.0),
     '출발 09:00': DEFAULT.with_(T0=9.0),
     '꺾임 덜 중시(벌점 ×0.5)': PASSENGER_FIRST,
-    '참고: 우회 노선 영향 반영(δ=0.2)': DEFAULT.with_(DETOUR_W=0.2),
+    '단순성 우선(벌점 ×2)': DEFAULT.with_(TURN=tuple(t * 2 for t in DEFAULT.TURN)),
 }
 
 
 def known_orders():
-    """지금까지 찾은 코스 — 노트북 결과 + v1 사전 계산 결과 (새 조건에서 출발 후보로 쓴다)"""
+    """지금까지 찾은 코스 — 노트북 결과 + 이전 사전 계산 결과(scenarios_v1, scenarios_archive) — 새 조건에서 출발 후보로 쓴다"""
     out = [json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))['tobe']['order']]
-    for f in sorted((ROOT / 'scenarios_v1').glob('*.json')):
+    for f in sorted([*(ROOT / 'scenarios_v1').glob('*.json'), *(ROOT / 'scenarios_archive').glob('*.json')]):
         out.append(json.load(open(f, encoding='utf-8'))['order'])
     return out
 
@@ -85,8 +78,8 @@ def main():
             print('cross-seed 교체:', eng.cross_seed(), '개')
     for x in eng.library():
         k = x['kpi']
-        print(f"  {x['조건']}: 시민영향 {k['citizen_impact']:,} 못탐 {k['riders']:,} 우회이용객 {k['detour_riders']:,} "
-              f"노선 {k['routes']} 전환 {k['turns']} 조망 {k['view_km']}km 목적함수 {x['목적함수']:,}")
+        print(f"  {x['조건']}: 못 타는 승객 {k['riders']:,} 정류장 {k['stops']} 노선 {k['routes']} 전환 {k['turns']} "
+              f"길이 {k['length_km']}km 목적함수 {x['목적함수']:,}")
 
 
 if __name__ == '__main__':
