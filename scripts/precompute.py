@@ -38,8 +38,14 @@ def main():
     ap.add_argument('--time-limit', type=float, default=600)
     ap.add_argument('--gap', type=float, default=0.005)
     ap.add_argument('--only', nargs='*')
+    ap.add_argument('--refresh', action='store_true', help='풀지 않고 저장된 결과만 재평가 + 서로 대입(cross-seed)')
     a = ap.parse_args()
     eng = Engine(ROOT)
+    if a.refresh:
+        print('재평가:', eng.refresh_store(), '개 | cross-seed 교체:', eng.cross_seed(), '개')
+        for x in eng.library():
+            print(f"  {x['조건']}: 피해 {x['kpi']['riders']} 노선 {x['kpi']['routes']} 조망 {x['kpi']['view_km']}km 목적함수 {x['목적함수']}")
+        return
 
     r = json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))
     res = eng.seed(DEFAULT, r['tobe']['order'], r['solver'])
@@ -54,6 +60,7 @@ def main():
         k = out.get('kpi', {})
         print(f"[{name}] ok={out['ok']} {time.time()-t0:.0f}초 | 피해 {k.get('riders')} 노선 {k.get('routes')} "
               f"조망 {k.get('view_km')}km 목적함수 {out.get('solver', {}).get('목적함수')} {out.get('reason', '')}", flush=True)
+    print('cross-seed 교체:', eng.cross_seed(), '개')
 
 
 if __name__ == '__main__':

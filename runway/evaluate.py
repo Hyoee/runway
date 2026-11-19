@@ -89,14 +89,48 @@ def compare(ev_a: dict, ev_b: dict, names=('AS-IS', 'TO-BE')) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def validate_course(sc: Scenario, order, check_identity=True) -> list[str]:
+def objective(sc: Scenario, order) -> float:
+    """고정된 코스의 MILP 목적함수 값(5-4식)을 직접 계산 — 다른 조건에서 찾은 해를 같은 기준으로 비교할 때 쓴다"""
+    from .model import tau
+    net, P = sc.net, sc.p
+    B = P.BAND_KM * 1000
+    used = {int(net.SEG[a]) for a in order}
+    km, f = 0.0, 0.0
+    for a in order:                                                                  # ① 승객 피해 (구간대 평균) ⑥ 정체성 보상
+        b = int(km // B)
+        lo, hi = b * B, min((b + 1) * B, P.LMAX)
+        if net.vol[a].sum() > 0:
+            f += sc.band_cost(a, lo, hi)
+        for k, lm in enumerate(P.IDENTITY):
+            if lo >= lm.a and hi <= lm.b:
+                f -= lm.w * sc.VK[k, a]
+        f += P.EPS_LEN * net.hw_w[a] * net.Lm[a]                                     # ⑤ 거리
+        km += net.Lm[a]
+    f += P.ALPHA * len({r for a in order for r in net.seg_routes[a]})                # ② 영향 노선
+    f += sum(tau(P, net.turn_angle(a, c)) for a, c in zip(order, order[1:]))          # ③ 방향 전환
+    pairs = {}                                                                       # ④ 되돌아오기·재방문
+    for s1 in used:
+        for a in (2 * s1, 2 * s1 + 1):
+            for b_, l in net.TWINS[a].items():
+                s2 = int(net.SEG[b_])
+                if s2 in used and s2 != s1:
+                    k = tuple(sorted((s1, s2)))
+                    pairs[k] = max(pairs.get(k, (0, 0))[0], l), P.PEN_TWIN
+    for (s1, s2), l in net.NEAR.items():
+        if s1 in used and s2 in used and (s1, s2) not in pairs:
+            pairs[(s1, s2)] = (l, P.PEN_NEAR)
+    f += sum(l * pen for l, pen in pairs.values())
+    return float(f)
+
+
+def validate_course(sc: Scenario, order, check_identity=True, check_endpoints=True) -> list[str]:
     """제약 위반 목록(비어 있으면 통과). 솔버 출력을 믿지 않고 독립적으로 다시 확인한다."""
     net, p, errs = sc.net, sc.p, []
     if not order:
         return ['코스가 비어 있습니다']
-    if int(net.U[order[0]]) != sc.s0:
+    if check_endpoints and int(net.U[order[0]]) != sc.s0:
         errs.append('출발 교차로에서 시작하지 않음')
-    if int(net.V[order[-1]]) != sc.f0:
+    if check_endpoints and int(net.V[order[-1]]) != sc.f0:
         errs.append('도착 교차로에서 끝나지 않음')
     for a, b in zip(order, order[1:]):
         if net.V[a] != net.U[b]:
@@ -110,9 +144,12 @@ def validate_course(sc: Scenario, order, check_identity=True) -> list[str]:
     L = float(sum(net.Lm[a] for a in order))
     if not (p.LMIN - 1e-6 <= L <= p.LMAX + 1e-6):
         errs.append(f'길이 {L/1000:.3f}km가 허용 범위 밖')
-    bad = [a for a in order if sc.FORB[a]]
-    if bad:
-        errs.append(f'금지 구간 arc {len(bad)}개 사용')
+    from .geo import hav
+    for z in p.FORBID:
+        if any(hav(net.allnodes[n], z.coord) < z.r for a in order for n in net.path_of(a)):
+            errs.append(f'금지 구간 통과: {z.name} (반경 {z.r:g}m)')
+    if any(sc.narrow[a] for a in order):
+        errs.append('차로 수 부족 도로 사용')
     if check_identity:
         for k, lm in enumerate(p.IDENTITY):
             km, v = 0.0, 0.0

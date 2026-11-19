@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from runway import DEFAULT, Scenario, ScenarioError, build_asis, evaluate, kpis, load_network, optimize, solve_milp, validate_course
+from runway.evaluate import objective
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULT = json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))
@@ -58,9 +59,13 @@ def test_saved_tobe_kpis_and_valid(sc):          # Step 9 TO-BE (저장된 코�
     assert validate_course(sc, order) == []
 
 
-def test_asis_violates_rules(sc):                # AS-IS는 TO-BE의 규칙(길이·왕복)을 어긴다 — 문제점 지적의 근거
-    errs = validate_course(sc, build_asis(sc)[0])
-    assert any('길이' in e for e in errs) and any('왕복' in e for e in errs)
+def test_asis_violates_rules(sc):                # AS-IS는 TO-BE의 규칙(길이·왕복·금지 구간)을 어긴다 — 문제점 지적의 근거
+    errs = validate_course(sc, build_asis(sc)[0], check_identity=False, check_endpoints=False)
+    assert any('길이' in e for e in errs) and any('왕복' in e for e in errs) and any('건국대병원' in e for e in errs)
+
+
+def test_objective_recomputation_matches_solver(sc):   # 고정 코스 목적함수 = 솔버가 보고한 값(38,336)
+    assert round(objective(sc, RESULT['tobe']['order'])) == pytest.approx(38336, abs=2)
 
 
 def test_lp_relaxation_bound(sc):                # Step 7 ① LP 완화 하한 24,239 — 모델 수식이 같은지

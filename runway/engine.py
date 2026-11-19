@@ -14,7 +14,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from .asis import build_asis
-from .evaluate import evaluate, kpis, road_table, to_geojson_feature, validate_course
+from .evaluate import evaluate, kpis, objective, road_table, to_geojson_feature, validate_course
 from .network import load_network
 from .params import DEFAULT, Params
 from .places import search_places
@@ -27,6 +27,27 @@ _NON_PROBLEM = {'TIME_LIMIT', 'GAP', 'START_NAME', 'FINISH_NAME'}
 
 def problem_key(p: Params) -> str:
     return p.key(*[f for f in Params.model_fields if f not in _NON_PROBLEM])
+
+
+def describe_params(p: Params) -> str:
+    """기본값과 다른 조건만 사람이 읽는 문장으로 — UI 라벨과 LLM 맥락에 쓴다"""
+    d, out = DEFAULT, []
+    if p.START != d.START or p.START_NAME != d.START_NAME:
+        out.append(f'출발 {p.START_NAME}')
+    if p.FINISH != d.FINISH or p.FINISH_NAME != d.FINISH_NAME:
+        out.append(f'도착 {p.FINISH_NAME}')
+    if p.T0 != d.T0:
+        out.append('출발 %02d:%02d' % (int(p.T0), round(p.T0 % 1 * 60)))
+    if p.IDENTITY != d.IDENTITY:
+        out += [f'{lm.name} 조망≥{lm.L/1000:g}km' for lm in p.IDENTITY] or ['정체성 조건 없음']
+    if p.FORBID != d.FORBID:
+        out += [f'금지: {z.name}(반경 {z.r:g}m)' for z in p.FORBID if z not in d.FORBID]
+        out += [f'금지 해제: {z.name}' for z in d.FORBID if z not in p.FORBID]
+    if p.TURN != d.TURN:
+        out.append(f'방향 전환 벌점 ×{p.TURN[0] / d.TURN[0]:g}')
+    if p.ALPHA != d.ALPHA:
+        out.append(f'노선 가중치 {p.ALPHA:g}')
+    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 08:00, 롯데타워 조망≥2km)'
 
 
 class Engine:
@@ -61,8 +82,9 @@ class Engine:
         ev = evaluate(sc, order)
         return dict(name=name, params=sc.p.model_dump(mode='json'), kpi=kpis(ev), route_list=ev['route_list'],
                     roads=road_table(ev, 300).to_dict('records'), geojson=to_geojson_feature(sc, order, name, ev),
-                    order=[int(a) for a in order], violations=validate_course(sc, order, check_identity=name != 'AS-IS'),
-                    snap_m=sc.snap_m, solver=info or {})
+                    order=[int(a) for a in order],
+                    violations=validate_course(sc, order, check_identity=name != 'AS-IS', check_endpoints=name != 'AS-IS'),
+                    objective=round(objective(sc, order)), snap_m=sc.snap_m, solver=info or {})
 
     def asis(self, p: Params = DEFAULT) -> dict:
         """AS-IS(2026 JTBC 코스)를 조건 p(출발 시각 등)로 평가. 출발·도착은 공식 코스 그대로."""
@@ -83,13 +105,57 @@ class Engine:
         return None
 
     def _save_if_better(self, p: Params, res: dict) -> dict:
+        """목적함수(같은 조건에서 직접 다시 계산한 값)가 더 작을 때만 교체"""
         old = self.cached(p)
-        obj_new, obj_old = res['solver'].get('목적함수'), (old or {}).get('solver', {}).get('목적함수')
-        if old and obj_old is not None and (obj_new is None or obj_old <= obj_new):
+        if old and old.get('objective') is not None and old['objective'] <= res['objective']:
             return old
         with open(self._path(p), 'w', encoding='utf-8') as fh:
             json.dump(res, fh, ensure_ascii=False, default=float)
         return res
+
+    def library(self) -> list[dict]:
+        """미리 계산·저장된 시나리오 목록 (조건 설명 + 핵심 KPI)"""
+        out = []
+        for f in sorted(self.store.glob('*.json')):
+            try:
+                r = json.load(open(f, encoding='utf-8'))
+                p = Params.model_validate(r['params'])
+            except (OSError, ValueError, KeyError):       # 다른 프로세스가 쓰는 중이거나 옛 형식
+                continue
+            out.append(dict(조건=describe_params(p), params=p, kpi=r['kpi'], 목적함수=r.get('objective'), order=r['order']))
+        return out
+
+    def refresh_store(self) -> int:
+        """저장된 결과를 현재 코드로 다시 평가·검사해 덮어쓴다 (평가 코드가 바뀐 뒤 실행)"""
+        n = 0
+        for f in sorted(self.store.glob('*.json')):
+            r = json.load(open(f, encoding='utf-8'))
+            p = Params.model_validate(r['params'])
+            res = self.package(self.scenario(p), r['order'], r.get('name', 'TO-BE'), r.get('solver'))
+            if res['violations']:
+                f.unlink()                                   # 규칙을 어기는 해는 버린다
+                continue
+            with open(f, 'w', encoding='utf-8') as fh:
+                json.dump(res, fh, ensure_ascii=False, default=float)
+            n += 1
+        return n
+
+    def cross_seed(self) -> int:
+        """저장된 해를 서로의 조건에 대입해 본다 — 더 엄격한 조건에서 찾은 해가 느슨한 조건에서도 더 좋을 수 있다
+        (노트북 Step 8의 '찾은 해 중 조건을 만족하는 최선' 규칙). 교체된 개수를 돌려준다."""
+        lib, n = self.library(), 0
+        for tgt in lib:
+            for src in lib:
+                if src is tgt:
+                    continue
+                try:
+                    sc = self.scenario(tgt['params'])
+                    res = self.package(sc, src['order'], 'TO-BE', dict(solver='cross-seed', 출처=src['조건']))
+                except ScenarioError:
+                    continue
+                if not res['violations'] and self._save_if_better(tgt['params'], res) is res:
+                    n += 1
+        return n
 
     def seed(self, p: Params, order, info: dict, name='TO-BE') -> dict:
         """다른 곳에서 구한 해(노트북 결과 등)를 캐시에 넣는다 — 제약 검사를 통과해야만"""
