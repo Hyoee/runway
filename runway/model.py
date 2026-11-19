@@ -61,7 +61,16 @@ def build_milp(sc: Scenario, A, relax=False, identity_L=None):
     for a in A:
         for r in net.seg_routes[a]:
             rmap.setdefault(r, []).append(a)
-    u = new_vars(prob, 'u', list(rmap), 0, 1)
+    u = new_vars(prob, 'u', list(rmap), 0, 1) if P.ALPHA > 0 else {}
+    # v2 우회 영향: d_r ≥ w_{r,b}·y_{e,b} — 노선 r이 코스에 걸리는 구간대 중 가장 큰 우회 비용
+    #   (구간대가 뒤로 갈수록 통제 창이 늦고 길어, 최댓값 ≈ 여러 구간대 통제 창의 합집합)
+    W = {}
+    if P.DETOUR_W > 0:
+        bands = {b: (b * B, min((b + 1) * B, P.LMAX)) for b in range(nb)}
+        for r in rmap:
+            if r in net.route_vol:
+                W[r] = {b: sc.route_band_cost(r, *lh) for b, lh in bands.items()}
+    d = new_vars(prob, 'd', [r for r in W if any(W[r].values())], 0)
     segA = {}
     for a in A:
         segA.setdefault(int(SEG[a]), []).append(a)
@@ -80,7 +89,8 @@ def build_milp(sc: Scenario, A, relax=False, identity_L=None):
     # ── 목적함수 (5-4) ──
     ta = {k: net.turn_angle(*k) for k in T}
     prob += (pulp.lpSum(sc.band_cost(a, *Y[(a, b)]) * y[(a, b)] for (a, b) in Y)                               # ① 승객 피해
-             + P.ALPHA * pulp.lpSum(u.values())                                                               # ② 영향 노선
+             + P.ALPHA * pulp.lpSum(u.values())                                                               # ② 영향 노선 (v1)
+             + pulp.lpSum(d.values())                                                                         # ② 우회 노선 이용객 (v2)
              + pulp.lpSum(tau(P, ta[k]) * z[k] for k in T if ta[k] >= 45)                                    # ③ 방향 전환
              + pulp.lpSum(float(pen * l) * q[k] for k, (l, pen) in pairs.items())                             # ④ 되돌아오기·재방문
              + pulp.lpSum(float(P.EPS_LEN * net.hw_w[a] * Lm[a]) * x[a] for a in A)                           # ⑤ 거리
@@ -122,9 +132,15 @@ def build_milp(sc: Scenario, A, relax=False, identity_L=None):
         prob += pulp.lpSum(float(VK[k, a]) * y[(a, b)] for (a, b) in Y
                            if Y[(a, b)][0] >= lm.a and Y[(a, b)][1] <= lm.b) >= Ls[k]                        # (7)
     for r, As in rmap.items():
-        for a in As:
-            prob += u[r] >= x[a]                                                                             # (10)
+        if r in u:
+            for a in As:
+                prob += u[r] >= x[a]                                                                         # (10)
+        if r in d:
+            for a in As:                                                                                      # (10') 우회 영향
+                ks_ = [k_ for k_ in byA.get(a, []) if W[r][k_[1]] > 0]
+                if ks_:   # Σ_b y_{a,b} = x_a ≤ 1 이라 정수해에서는 Σ_b w_{r,b}·y_{a,b} = (a가 놓인 구간대의 w) — 구간대별 제약과 같고 수는 1/구간대
+                    prob += d[r] >= pulp.lpSum(W[r][k_[1]] * y[k_] for k_ in ks_)
     for (s1, s2) in pairs:
         prob += q[(s1, s2)] >= Xs[s1] + Xs[s2] - 1                                                           # (11)
-    nvar = len(x) + len(p) + len(y) + len(z) + len(u) + len(q)
+    nvar = len(x) + len(p) + len(y) + len(z) + len(u) + len(d) + len(q)
     return prob, x, nvar

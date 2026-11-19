@@ -145,6 +145,31 @@ class Scenario:
             if not in_bbox(lm.coord):
                 raise ScenarioError(f"랜드마크 '{lm.name}'가 분석 영역 밖입니다.")
 
+    # ── 우회 노선 영향 (v2) ──
+    def hour_overlap(self, win) -> np.ndarray:
+        """통제 창 win이 각 시간대(06~14시)와 겹치는 시간(h)"""
+        HA = np.array(HOURS)
+        return np.clip(np.minimum(win[1], HA + 1) - np.maximum(win[0], HA), 0, None)
+
+    def band_hours(self, lo, hi) -> np.ndarray:
+        """구간대 [lo, hi) m 안에서 통제될 때 시간대별 평균 통제 시간 — 노선 우회 비용에 쓴다"""
+        key = (round(lo), round(hi))
+        c = self.__dict__.setdefault('_bh', {})
+        if key not in c:
+            kms = np.arange(lo, max(hi, lo + 1), 250.0) / 1000
+            c[key] = np.mean([self.hour_overlap(self.window(k)) for k in kms], axis=0)
+        return c[key]
+
+    def route_band_cost(self, r, lo, hi) -> float:
+        """노선 r이 구간대 [lo, hi)에서 통제될 때의 우회 비용 = DETOUR_W × 그 시간 동안의 노선 전체 이용객"""
+        q = self.net.route_vol.get(r)
+        return 0.0 if q is None else float(self.p.DETOUR_W * self.band_hours(lo, hi) @ q)
+
+    def route_detour_riders(self, r, win) -> float:
+        """노선 r이 통제 창 win 동안 우회할 때 영향 받는 노선 이용객 (가중치 없이)"""
+        q = self.net.route_vol.get(r)
+        return 0.0 if q is None else float(self.hour_overlap(win) @ q)
+
     def band_cost(self, a, lo, hi):
         st = self.p.STEP
         k0, k1 = int(max(lo, self.lo_a[a]) // st), int(min(hi, self.hi_a[a], self.p.LMAX) // st)

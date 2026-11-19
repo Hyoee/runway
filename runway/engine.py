@@ -47,7 +47,9 @@ def describe_params(p: Params) -> str:
         r = p.TURN[0] / d.TURN[0]
         out.append(f"{'승객 우선' if r < 1 else '단순성 우선'} (꺾임 벌점 ×{r:g})")
     if p.ALPHA != d.ALPHA:
-        out.append(f'노선 가중치 {p.ALPHA:g}')
+        out.append(f'노선당 고정 벌점 {p.ALPHA:g}')
+    if p.DETOUR_W != d.DETOUR_W:
+        out.append('우회 영향 미반영 (못 타는 승객만)' if p.DETOUR_W == 0 else f'우회 가중치 δ={p.DETOUR_W:g}')
     return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 08:00, 롯데타워 조망≥2km)'
 
 
@@ -82,6 +84,7 @@ class Engine:
     def package(self, sc: Scenario, order, name: str, info: dict | None = None) -> dict:
         ev = evaluate(sc, order)
         return dict(name=name, params=sc.p.model_dump(mode='json'), kpi=kpis(ev), route_list=ev['route_list'],
+                    route_detour=ev['route_detour'],
                     roads=road_table(ev, 300).to_dict('records'), geojson=to_geojson_feature(sc, order, name, ev),
                     order=[int(a) for a in order],
                     violations=validate_course(sc, order, check_identity=name != 'AS-IS', check_endpoints=name != 'AS-IS'),

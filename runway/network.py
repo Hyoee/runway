@@ -23,7 +23,27 @@ HOURS = list(range(6, 15))
 EXCLUDE = ['강변북로', '올림픽대로', '동부간선', '내부순환', '북부간선', '서부간선', '분당수서', '강남순환', '고가', '터널']
 KEEP = {'trunk', 'primary', 'secondary'}
 KX, KY = 88200.0, 111000.0
-CACHE_VERSION = 1
+CACHE_VERSION = 2
+
+
+def is_day_route(r: str) -> bool:
+    """야간버스(N…)는 06~14시에 다니지 않는다"""
+    return not str(r).startswith('N')
+
+
+def route_volumes(agg: pd.DataFrame) -> dict:
+    """노선별 시간대별 이용객 추정 — 서울 전체 정류장 승차를 그 정류장의 주간 노선 수로 나눠 노선마다 합산.
+    (원자료 OA-12913은 노선×정류장 단위지만 data/의 집계 파일은 정류장 단위라, 균등 배분으로 근사)"""
+    vols = agg[[f'h{h}' for h in HOURS]].to_numpy(float) * agg['f'].to_numpy(float)[:, None]
+    out: dict[str, np.ndarray] = {}
+    for rs, v in zip(agg['routes'].astype(str), vols):
+        day = [r for r in rs.split('|') if is_day_route(r)]
+        if not day:
+            continue
+        share = v / len(day)
+        for r in day:
+            out[r] = out.get(r, 0) + share
+    return out
 
 
 @dataclass
@@ -46,6 +66,7 @@ class Network:
     NEAR: dict
     base: list                 # 배경 지도용 OSM 도로 좌표열
     stats: dict = field(default_factory=dict)
+    route_vol: dict = field(default_factory=dict)   # 노선 → 시간대별(06~14시) 노선 전체 이용객 추정 (주말 하루)
 
     @property
     def NA(self) -> int:
@@ -310,6 +331,7 @@ def build_network(data_dir: Path, p: Params = DEFAULT) -> Network:
     net = Network(allnodes=allnodes, segs=segs, nodes=nodes, arcs=arcs, U=U, V=V, SEG=SEG, REV=REV, Lm=Lm, vol=vol,
                   seg_routes=seg_routes, hw_w=hw_w, HOUT=np.zeros(NA), HIN=np.zeros(NA), TWINS={}, NEAR={}, base=base)
     net.HOUT, net.HIN, net.TWINS, net.NEAR = _shape_features(net, p.NEAR_R)
+    net.route_vol = route_volumes(agg)
     net.stats = dict(교차로=len(nodes), 구간=len(segs), 총km=round(sum(s['length'] for s in segs) / 1000),
                      대상정류장=n_area, 연결정류장=n_snap, arc=NA,
                      되돌아오기쌍=sum(len(d) - 1 for d in net.TWINS.values()) // 2, 재방문쌍=len(net.NEAR))

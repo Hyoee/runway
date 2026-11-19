@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from runway import DEFAULT, Scenario, ScenarioError, build_asis, evaluate, kpis, load_network, optimize, solve_milp, validate_course
+from runway import Scenario, ScenarioError, build_asis, evaluate, kpis, load_network, optimize, solve_milp, validate_course
+from runway.params import NOTEBOOK as DEFAULT          # 노트북(v1) 목적식으로 회귀 비교
 from runway.evaluate import objective
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,31 @@ def test_asis_violates_rules(sc):                # AS-IS는 TO-BE의 규칙(길�
 
 def test_objective_recomputation_matches_solver(sc):   # 고정 코스 목적함수 = 솔버가 보고한 값(38,336)
     assert round(objective(sc, RESULT['tobe']['order'])) == pytest.approx(38336, abs=2)
+
+
+@pytest.mark.parametrize('version', ['v1', 'v2'])
+def test_milp_objective_equals_recomputation(net, version):
+    """경로가 하나뿐인 회랑(저장된 코스의 arc만)에서 MILP를 풀면, 솔버 목적함수 = objective() 재계산이어야 한다.
+    → 모델 수식과 재계산 함수가 같은 식임을 v1(노트북)·v2(우회 승객) 모두에서 확인"""
+    from runway.params import DEFAULT as V2
+    sc_ = Scenario(net, DEFAULT if version == 'v1' else V2)
+    order = RESULT['tobe']['order']
+    corridor = sorted(set(order) | {int(net.REV[a]) for a in order})   # 반대 방향 포함(쌍 벌점 판정용) — 경로는 여전히 하나
+    out, info = solve_milp(sc_, corridor, time_limit=60)
+    assert out == order
+    assert info['목적함수'] == pytest.approx(objective(sc_, order), abs=2)
+
+
+def test_route_volumes_sane(net):
+    """노선별 이용객 합 = 주간 노선이 있는 정류장들의 승차 합 (균등 배분이 승객을 만들거나 잃지 않음)"""
+    import numpy as np
+    from runway.network import load_data
+    agg = load_data(ROOT / 'data', 'weekend')[0]
+    day = agg['routes'].astype(str).map(lambda s: any(not r.startswith('N') for r in s.split('|')))
+    tot = (agg.loc[day, [f'h{h}' for h in range(6, 15)]].to_numpy(float) * agg.loc[day, 'f'].to_numpy(float)[:, None]).sum()
+    assert sum(v.sum() for v in net.route_vol.values()) == pytest.approx(tot, rel=1e-9)
+    assert not any(r.startswith('N') for r in net.route_vol)
+    assert all(np.all(v >= 0) for v in net.route_vol.values())
 
 
 def test_lp_relaxation_bound(sc):                # Step 7 ① LP 완화 하한 24,239 — 모델 수식이 같은지

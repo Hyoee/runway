@@ -29,8 +29,17 @@ SYSTEM = """당신은 'RunWay' — 서울 도심 마라톤 코스를 설계하�
 - 출발지·도착지를 바꾸면 '30km 이후 롯데월드타워 조망' 정체성 조건이 맞지 않을 수 있습니다. 그때는 조망 하한을 0으로 할지 물어보세요.
 - 기존 코스의 문제점 질문에는 get_asis_problems, 버스 노선 질문에는 get_affected_bus_routes, 조망과 피해의 교환 관계에는 list_precomputed_scenarios를 씁니다.
 
+## 지표 (헷갈리기 쉬움 — 정확히 구분해서 말하세요)
+- 시민 영향 = 못 타는 승객 + δ×우회 노선 이용객. 최적화가 줄이는 승객 지표이며 핵심 숫자입니다.
+- 못 타는 승객: 통제 시간 동안 코스 위 정류장에서 버스를 못 타는 사람.
+- 우회 노선 이용객: 코스에 걸려 우회하는 노선의 '노선 전체' 이용객(통제 시간 동안, 추정). 그중 δ(기본 0.2)만큼을 지연 피해로 셉니다.
+- 영향 노선 수: 개수일 뿐 크기를 반영하지 않습니다. 도심 환승 정류장은 한 곳에 노선이 10~20개 모여 있어, 짧게 막혀도 노선 수가 크게 늘 수 있습니다.
+  "노선은 많은데 피해는 적다" 같은 질문에는 우회 노선 이용객·시민 영향으로 설명하세요.
+- δ는 정책 가정입니다. 사용자가 바꾸고 싶어 하면 optimize_course(detour_weight=...)로 다시 계산합니다.
+
 ## 데이터와 한계 (질문받으면 정직하게)
-- 수요: 서울시 버스 정류장별 승차(2026-10, 주말 하루 평균 수준 × 월 전체 시간대 분포). 코스 위에 정류장이 있는 노선만 '영향 노선'으로 셉니다.
+- 수요: 서울시 버스 정류장별 승차(2026-10, 주말 하루 평균 수준 × 월 전체 시간대 분포).
+- 노선별 이용객: 정류장 승차를 그 정류장의 주간 노선 수로 균등 배분해 노선마다 합산한 추정치(노선별 원자료가 있으면 교체 가능). 야간버스 제외.
 - 통제 시간: 선두 20km/h, 후미 5시간 컷오프 기준, 2026 대회 경찰 발표 통제 시각에 맞춰 보정.
 - 도로: OpenStreetMap 간선·보조간선. AS-IS는 공식 경유지를 이 도로망 위에 옮긴 것이라 모델상 43.2km로 실제보다 깁니다.
 - 솔버 결과는 '후보 회랑 안에서 허용 gap 이내 최적'입니다.
@@ -63,7 +72,8 @@ def run_turn(client: anthropic.Anthropic, s: Session, history: list[dict], user_
     state = f'[현재 화면 상태] 조건: {describe_params(s.params) if s.result else "아직 계산된 코스 없음"}'
     if s.result:
         k = s.result['kpi']
-        state += f" | TO-BE 승객피해 {k['riders']}명, 영향노선 {k['routes']}개, 길이 {k['length_km']}km"
+        state += (f" | TO-BE 시민영향 {k.get('citizen_impact')}명 (못 타는 승객 {k['riders']}명, 우회 노선 이용객 {k.get('detour_riders')}명), "
+                  f"영향노선 {k['routes']}개, 길이 {k['length_km']}km")
     messages = history + [{'role': 'user', 'content': f'{state}\n\n{user_text}'}]
     runner = client.beta.messages.tool_runner(
         model=MODEL,

@@ -33,8 +33,14 @@ class Session:
         return self.asis
 
 
-KEY_KPI = ['length_km', 'riders', 'routes', 'stops', 'turns', 'sharp', 'backtrack_km', 'view_km', 'junctions',
-           'closure_kmh', 'late_km', 'riders_per_km']
+KEY_KPI = ['length_km', 'citizen_impact', 'riders', 'detour_riders', 'routes', 'stops', 'turns', 'sharp', 'backtrack_km',
+           'view_km', 'junctions', 'closure_kmh', 'late_km', 'riders_per_km']
+KPI_MEANING = {   # LLM이 지표를 바르게 설명하도록 결과에 함께 넣는다
+    'citizen_impact': '시민 영향(명) = 못 타는 승객 + δ×우회 노선 이용객 — 목적함수의 승객 부분',
+    'riders': '통제 시간 동안 코스 위 정류장에서 버스를 못 타는 승객(명)',
+    'detour_riders': '통제 시간 동안 우회하는 노선 전체의 이용객 추정(명, 가중치 전)',
+    'routes': '코스 위에 정류장이 있는 노선 수',
+}
 
 
 def _pct(a, b):
@@ -50,7 +56,8 @@ def summarize(s: Session, res: dict) -> dict:
         캐시결과=res.get('cached', False),
         KPI={x: k[x] for x in KEY_KPI},
         AS_IS_KPI={x: a[x] for x in KEY_KPI},
-        AS_IS대비_변화율_퍼센트={x: _pct(a[x], k[x]) for x in ('riders', 'routes', 'turns', 'riders_per_km', 'backtrack_km')},
+        AS_IS대비_변화율_퍼센트={x: _pct(a[x], k[x]) for x in ('citizen_impact', 'riders', 'detour_riders', 'routes', 'turns', 'backtrack_km')},
+        지표_뜻=KPI_MEANING, 우회가중치_δ=res['params'].get('DETOUR_W'),
         주요도로=[f"{r['km']}km {r['도로']} {r['길이km']}km" for r in res['roads'][:12]],
         출발도착_교차로까지_거리m=res.get('snap_m'),
         솔버=dict((x, res['solver'].get(x)) for x in ('solver', '목적함수', '해 종류', '초', 'gap') if x in res['solver']),
@@ -88,7 +95,8 @@ def make_tools(s: Session) -> list:
     @beta_tool
     def optimize_course(start_place: str | None = None, finish_place: str | None = None, start_hour: float | None = None,
                         view_min_km: float | None = None, add_forbidden_place: str | None = None, forbidden_radius_m: float = 150.0,
-                        clear_forbidden: bool = False, simplicity: float | None = None, reset: bool = False) -> str:
+                        clear_forbidden: bool = False, simplicity: float | None = None, detour_weight: float | None = None,
+                        reset: bool = False) -> str:
         """현재 조건에서 바꿀 값만 받아 PuLP MILP로 최적 코스를 계산한다. 같은 조건을 이전에 풀었으면 즉시 돌려준다.
         새 조건이면 최대 2분 걸린다. 결과는 AS-IS(2026 JTBC 코스) 대비 변화율을 포함한다.
 
@@ -101,11 +109,13 @@ def make_tools(s: Session) -> list:
             forbidden_radius_m: 금지 반경(m), 기본 150
             clear_forbidden: True면 기존 금지 구간을 모두 해제
             simplicity: 방향 전환 벌점 배율. 1이 기본, 2면 꺾임을 두 배로 싫어함(더 단순한 코스), 0.5면 덜 신경 씀
+            detour_weight: 우회 가중치 δ(0~1). 우회 노선 이용객 1명을 못 타는 승객 몇 명으로 볼지. 기본 0.2, 0이면 우회 영향 무시
             reset: True면 모든 조건을 기본값(광화문→올림픽공원, 08:00, 조망≥2km)으로 되돌린 뒤 나머지 값을 적용
         """
         args = {k: v for k, v in dict(start_place=start_place, finish_place=finish_place, start_hour=start_hour,
                                       view_min_km=view_min_km, add_forbidden_place=add_forbidden_place,
-                                      clear_forbidden=clear_forbidden, simplicity=simplicity, reset=reset).items() if v not in (None, False)}
+                                      clear_forbidden=clear_forbidden, simplicity=simplicity, detour_weight=detour_weight,
+                                      reset=reset).items() if v not in (None, False)}
         p, upd = (DEFAULT if reset else s.params), {}
         for key, nm_key, q in (('START', 'START_NAME', start_place), ('FINISH', 'FINISH_NAME', finish_place)):
             if q:
@@ -127,6 +137,8 @@ def make_tools(s: Session) -> list:
             upd['FORBID'] = forb
         if simplicity is not None:
             upd['TURN'] = tuple(t * float(simplicity) for t in DEFAULT.TURN)
+        if detour_weight is not None:
+            upd['DETOUR_W'] = float(detour_weight)
         try:
             newp = p.with_(**upd)
         except Exception as e:                     # 스키마 검증 실패 (범위 밖 값 등)
@@ -155,7 +167,7 @@ def make_tools(s: Session) -> list:
 
     @beta_tool
     def get_affected_bus_routes(course: str = 'TO-BE') -> str:
-        """코스 위에 정류장이 있어 통제 시간에 영향을 받는 버스 노선 목록.
+        """코스 위에 정류장이 있어 통제 시간에 우회하는 버스 노선 목록과, 노선별 우회 시간 중 이용객 추정(큰 순).
 
         Args:
             course: 'TO-BE' 또는 'AS-IS'
@@ -163,13 +175,17 @@ def make_tools(s: Session) -> list:
         r = s.ensure_asis() if course.upper() == 'AS-IS' else s.result
         if r is None:
             return record('get_affected_bus_routes', dict(course=course), dict(ok=False, error='코스 없음'))
-        return record('get_affected_bus_routes', dict(course=course), dict(ok=True, 노선수=len(r['route_list']), 노선=r['route_list']))
+        rd = r.get('route_detour', {})
+        return record('get_affected_bus_routes', dict(course=course), dict(
+            ok=True, 노선수=len(r['route_list']), 우회노선_이용객_합=r['kpi'].get('detour_riders'),
+            영향_큰_노선_상위15=[dict(노선=k, 우회중_이용객=v) for k, v in list(rd.items())[:15]], 전체노선=r['route_list']))
 
     @beta_tool
     def list_precomputed_scenarios() -> str:
-        """미리 계산해 둔 시나리오(조망 하한별·출발 시각별 등)의 KPI 표. 파레토(조망 vs 승객 피해) 질문에 쓴다."""
+        """미리 계산해 둔 시나리오(조망 하한별·출발 시각별·가중치별)의 KPI 표. 파레토·가중치 민감도 질문에 쓴다."""
         lib = s.engine.library()
-        return record('list_precomputed_scenarios', {}, dict(시나리오=[dict(조건=x['조건'], 승객피해=x['kpi']['riders'], 영향노선=x['kpi']['routes'],
-                                                                          조망km=x['kpi']['view_km'], 방향전환=x['kpi']['turns'], 목적함수=x['목적함수']) for x in lib]))
+        return record('list_precomputed_scenarios', {}, dict(지표_뜻=KPI_MEANING, 시나리오=[dict(
+            조건=x['조건'], 시민영향=x['kpi']['citizen_impact'], 못타는승객=x['kpi']['riders'], 우회노선이용객=x['kpi']['detour_riders'],
+            영향노선=x['kpi']['routes'], 조망km=x['kpi']['view_km'], 방향전환=x['kpi']['turns'], 목적함수=x['목적함수']) for x in lib]))
 
     return [search_place, optimize_course, get_current_result, get_asis_problems, get_affected_bus_routes, list_precomputed_scenarios]

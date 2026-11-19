@@ -11,7 +11,9 @@ from .scenario import Scenario
 KPI_LABELS = [  # (표시 이름, 키, 낮을수록 좋은가)
     ('코스 길이 (km)', 'length_km', None),
     ('통제 시간대 승객 피해 (명/주말 하루)', 'riders', True),
+    ('시민 영향 = 못 타는 승객 + δ×우회 이용객 (명)', 'citizen_impact', True),
     ('영향 받는 버스 노선 (개)', 'routes', True),
+    ('우회 노선 이용객, 통제 시간 중 (명, 추정)', 'detour_riders', True),
     ('통제되는 정류장 (곳)', 'stops', True),
     ('도로 통제 부담 (km×시간)', 'closure_kmh', True),
     ('통제 필요 교차로 (곳)', 'junctions', True),
@@ -52,6 +54,13 @@ def evaluate(sc: Scenario, order) -> dict:
     for r in rows:
         w = visits[r['seg']]; r['피해'] = 0 if r['seg'] in done else round(seg_r[r['seg']]); done.add(r['seg'])
         r['통제'] = f'{_hm(w[0])}–{_hm(w[1])}'
+    # v2: 우회 노선 이용객 — 노선별 통제 창 = 그 노선 정류장이 있는 코스 구간들의 통제 창 합집합(첫 시작~마지막 해제)
+    rwin = {}
+    for sid, w in visits.items():
+        for stp in net.segs[sid]['stops']:
+            for r in stp['routes']:
+                o = rwin.setdefault(r, [w[0], w[1]]); o[0] = min(o[0], w[0]); o[1] = max(o[1], w[1])
+    detour = {r: sc.route_detour_riders(r, w) for r, w in rwin.items()}
     ta = [net.turn_angle(a, b) for a, b in zip(order, order[1:])]
     back, seen_a = 0.0, set()
     for b in order:
@@ -61,12 +70,16 @@ def evaluate(sc: Scenario, order) -> dict:
                 view_km=round(view / 1000, 1), late_km=round(late / 1000, 1), closure_kmh=round(kmh),
                 junctions=len({x for a in order for x in (net.U[a], net.V[a])}),
                 turns=int(sum(t >= 45 for t in ta)), sharp=int(sum(t >= 100 for t in ta)), backtrack_km=round(back / 1000, 1),
-                riders_per_km=round(tot / L) if L else 0, route_list=sorted(rset), rows=rows)
+                riders_per_km=round(tot / L) if L else 0,
+                detour_riders=round(sum(detour.values())),                                 # 우회 노선 이용객 (가중치 없음)
+                citizen_impact=round(tot + sc.p.DETOUR_W * sum(detour.values())),          # 시민 영향 = 못 타는 승객 + δ×우회 이용객
+                route_list=sorted(rset),
+                route_detour={r: round(v) for r, v in sorted(detour.items(), key=lambda t: -t[1])}, rows=rows)
 
 
 def kpis(ev: dict) -> dict:
-    """rows·route_list를 뺀 숫자 KPI만"""
-    return {k: v for k, v in ev.items() if k not in ('rows', 'route_list')}
+    """rows·route_list 등 목록을 뺀 숫자 KPI만"""
+    return {k: v for k, v in ev.items() if k not in ('rows', 'route_list', 'route_detour')}
 
 
 def road_table(ev, min_len=300) -> pd.DataFrame:
@@ -106,7 +119,16 @@ def objective(sc: Scenario, order) -> float:
                 f -= lm.w * sc.VK[k, a]
         f += P.EPS_LEN * net.hw_w[a] * net.Lm[a]                                     # ⑤ 거리
         km += net.Lm[a]
-    f += P.ALPHA * len({r for a in order for r in net.seg_routes[a]})                # ② 영향 노선
+    f += P.ALPHA * len({r for a in order for r in net.seg_routes[a]})                # ② 영향 노선 (v1)
+    if P.DETOUR_W > 0:                                                               # ② 우회 노선 이용객 (v2, MILP 식 10'과 동일)
+        dmax, km = {}, 0.0
+        for a in order:
+            if net.vol[a].sum() > 0 or sc.VK[:, a].max() > 1:                     # MILP에서 y_{e,b}가 있는 arc
+                b = int(km // B); lo, hi = b * B, min((b + 1) * B, P.LMAX)
+                for r in net.seg_routes[a]:
+                    dmax[r] = max(dmax.get(r, 0.0), sc.route_band_cost(r, lo, hi))
+            km += net.Lm[a]
+        f += sum(dmax.values())
     f += sum(tau(P, net.turn_angle(a, c)) for a, c in zip(order, order[1:]))          # ③ 방향 전환
     pairs = {}                                                                       # ④ 되돌아오기·재방문
     for s1 in used:
