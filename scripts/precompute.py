@@ -27,15 +27,14 @@ def lotte(L):
 PASSENGER_FIRST = DEFAULT.with_(TURN=tuple(t * 0.5 for t in DEFAULT.TURN))
 
 SCENARIOS = {                                   # 이름: 조건 (데모·파레토·일정·가중치 질문에 바로 답하기 위한 것)
-    '기본(08:00, 조망≥2km, δ=0.2)': DEFAULT,
+    '기본(일요일 08:00, 조망≥2km, 못 타는 승객 최소)': DEFAULT,
     '조망 하한 0km': DEFAULT.with_(IDENTITY=lotte(0.0)),
     '조망 하한 1km': DEFAULT.with_(IDENTITY=lotte(1000.0)),
     '조망 하한 3km': DEFAULT.with_(IDENTITY=lotte(3000.0)),
     '출발 07:00': DEFAULT.with_(T0=7.0),
     '출발 09:00': DEFAULT.with_(T0=9.0),
     '꺾임 덜 중시(벌점 ×0.5)': PASSENGER_FIRST,
-    '우회 가중치 δ=0 (못 타는 승객만)': DEFAULT.with_(DETOUR_W=0.0),
-    '우회 가중치 δ=0.5': DEFAULT.with_(DETOUR_W=0.5),
+    '참고: 우회 노선 영향 반영(δ=0.2)': DEFAULT.with_(DETOUR_W=0.2),
 }
 
 

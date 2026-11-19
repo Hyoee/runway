@@ -36,10 +36,10 @@ class Session:
 KEY_KPI = ['length_km', 'citizen_impact', 'riders', 'detour_riders', 'routes', 'stops', 'turns', 'sharp', 'backtrack_km',
            'view_km', 'junctions', 'closure_kmh', 'late_km', 'riders_per_km']
 KPI_MEANING = {   # LLM이 지표를 바르게 설명하도록 결과에 함께 넣는다
-    'citizen_impact': '시민 영향(명) = 못 타는 승객 + δ×우회 노선 이용객 — 목적함수의 승객 부분',
-    'riders': '통제 시간 동안 코스 위 정류장에서 버스를 못 타는 승객(명)',
-    'detour_riders': '통제 시간 동안 우회하는 노선 전체의 이용객 추정(명, 가중치 전)',
-    'routes': '코스 위에 정류장이 있는 노선 수',
+    'citizen_impact': '시민 영향(명) = 못 타는 승객 + δ×우회 노선 이용객 — δ=0(기본)이면 못 타는 승객과 같음',
+    'riders': '정류장이 마라톤 코스에 들어가 통제 시간 동안 버스를 못 타는 승객(명) — 최적화가 줄이는 핵심 값',
+    'detour_riders': '통제 시간 동안 우회하는 노선 전체의 이용객(명, 참고 지표)',
+    'routes': '코스 위에 정류장이 있는 노선 수 (참고 지표)',
 }
 
 
@@ -109,7 +109,7 @@ def make_tools(s: Session) -> list:
             forbidden_radius_m: 금지 반경(m), 기본 150
             clear_forbidden: True면 기존 금지 구간을 모두 해제
             simplicity: 방향 전환 벌점 배율. 1이 기본, 2면 꺾임을 두 배로 싫어함(더 단순한 코스), 0.5면 덜 신경 씀
-            detour_weight: 우회 가중치 δ(0~1). 우회 노선 이용객 1명을 못 타는 승객 몇 명으로 볼지. 기본 0.2, 0이면 우회 영향 무시
+            detour_weight: 우회 가중치 δ(0~1). 우회 노선 이용객 1명을 못 타는 승객 몇 명으로 볼지. 기본 0(못 타는 승객만). 사용자가 우회 영향 반영을 원할 때만 지정
             reset: True면 모든 조건을 기본값(광화문→올림픽공원, 08:00, 조망≥2km)으로 되돌린 뒤 나머지 값을 적용
         """
         args = {k: v for k, v in dict(start_place=start_place, finish_place=finish_place, start_hour=start_hour,

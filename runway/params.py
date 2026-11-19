@@ -71,7 +71,7 @@ class Params(_Frozen):
     MIN_LANES: float = 1.0
     # 목적식 가중치
     ALPHA: float = Field(0.0, ge=0, description='영향 노선 1개당 고정 벌점 (노트북 v1은 60). 우회 영향은 DETOUR_W로 승객 단위 계산')
-    DETOUR_W: float = Field(0.2, ge=0, le=1, description='우회 노선 이용객 1명의 가중치 (못 타는 승객 1명 = 1). '
+    DETOUR_W: float = Field(0.0, ge=0, le=1, description='우회 노선 이용객 1명의 가중치 (못 타는 승객 1명 = 1). 기본 0 = 못 타는 승객만. '
                                                          '통제 시간 동안 우회하는 노선의 전체 이용객 중 지연을 겪는 비율로 해석')
     TURN: tuple[float, float, float] = (1000.0, 2000.0, 5000.0)
     PEN_TWIN: float = 3.0

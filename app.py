@@ -76,8 +76,8 @@ with st.sidebar:
                          float(p.IDENTITY[0].L / 1000) if p.IDENTITY else 0.0, 0.5)
         simple = st.select_slider('코스 단순성 (꺾임 벌점 배율)', [0.5, 1.0, 2.0, 3.0], value=round(p.TURN[0] / DEFAULT.TURN[0], 1)
                                   if round(p.TURN[0] / DEFAULT.TURN[0], 1) in (0.5, 1.0, 2.0, 3.0) else 1.0)
-        dw = st.select_slider('우회 가중치 δ (우회 노선 이용객 1명 = 못 타는 승객 δ명)', [0.0, 0.1, 0.2, 0.3, 0.5],
-                              value=p.DETOUR_W if p.DETOUR_W in (0.0, 0.1, 0.2, 0.3, 0.5) else 0.2)
+        dw = st.select_slider('고급: 우회 노선 영향 가중치 δ (0 = 못 타는 승객만)', [0.0, 0.1, 0.2, 0.3, 0.5],
+                              value=p.DETOUR_W if p.DETOUR_W in (0.0, 0.1, 0.2, 0.3, 0.5) else 0.0)
         go = st.form_submit_button('최적 코스 계산', type='primary', width='stretch')
     if go:
         kw = dict(start_hour=t0, view_min_km=view, simplicity=simple, detour_weight=dw)
@@ -106,7 +106,8 @@ with st.sidebar:
     st.subheader('미리 계산된 시나리오')
     lib = eng.library()
     for i, x in enumerate(lib):
-        if st.button(f"{x['조건']} — 시민 영향 {x['kpi'].get('citizen_impact', x['kpi']['riders']):,}명", key=f'lib{i}', width='stretch'):
+        lab_ = (f"시민 영향 {x['kpi']['citizen_impact']:,}명" if x['params'].DETOUR_W > 0 else f"못 타는 승객 {x['kpi']['riders']:,}명")
+        if st.button(f"{x['조건']} — {lab_}", key=f'lib{i}', width='stretch'):
             S.params, S.result = x['params'], dict(eng.cached(x['params']), ok=True, cached=True)
             st.rerun()
     st.divider()
@@ -126,18 +127,21 @@ with left:
     st.caption(f"현재 조건: {describe_params(S.params)}")
     k, a = R['kpi'], A['kpi']
     cols = st.columns(5)
-    tiles = [('시민 영향 (명)', 'citizen_impact', '못 타는 승객 + δ×우회 노선 이용객 — 최적화가 줄이는 값'),
-             ('못 타는 승객', 'riders', '통제 시간 동안 코스 위 정류장에서 버스를 못 타는 승객 (일요일 하루 기준)'),
-             ('우회 노선 이용객', 'detour_riders', '통제 시간 동안 우회하는 노선 전체의 이용객 추정'),
-             ('영향 노선', 'routes', '코스 위에 정류장이 있는 노선 수 (크기 미반영)'),
-             ('방향 전환 45°↑', 'turns', '러너가 외우기 쉬운 단순한 코스일수록 적음')]
+    tiles = [('못 타는 승객 (명)', 'riders', '정류장이 마라톤 코스에 들어가 통제 시간 동안 버스를 못 타는 승객 (일요일 하루 기준) — 최적화가 줄이는 값'),
+             ('방향 전환 45°↑', 'turns', '러너가 외우기 쉬운 단순한 코스일수록 적음 — 최적화 벌점'),
+             ('왕복 회귀 (km)', 'backtrack_km', '달려온 길을 되돌아오는 거리 — 최적화 벌점'),
+             ('영향 노선 (참고)', 'routes', '코스 위에 정류장이 있는 노선 수 — 최적화에는 쓰지 않는 참고 지표'),
+             ('우회 노선 이용객 (참고)', 'detour_riders', '통제 시간 동안 우회하는 노선 전체의 이용객 — 참고 지표 (δ>0이면 최적화에 반영)')]
+    if S.params.DETOUR_W > 0:
+        tiles[0] = ('시민 영향 (명)', 'citizen_impact', f'못 타는 승객 + {S.params.DETOUR_W:g}×우회 노선 이용객 — 최적화가 줄이는 값')
     for c, (lab, key_, hlp) in zip(cols, tiles):
         if key_ not in k or key_ not in a:
             continue
         d = k[key_] - a[key_]
         pct = f' ({d / a[key_] * 100:+.0f}%)' if a[key_] else ''
         c.metric(lab, f'{k[key_]:,}', f'{d:+,}{pct}' if d else '변화 없음', delta_color='inverse', help=hlp)
-    st.caption(f'변화는 AS-IS(2026 JTBC 코스) 대비 · 우회 가중치 δ = {S.params.DETOUR_W:g}')
+    st.caption('변화는 AS-IS(2026 JTBC 코스) 대비 · 승객 기준: 정류장이 코스에 들어가 버스를 못 타는 승객'
+               + (f' + {S.params.DETOUR_W:g}×우회 노선 이용객' if S.params.DETOUR_W > 0 else ''))
 
     # 지도
     def path_rows(res, name, color):
@@ -171,6 +175,8 @@ with left:
     with t1:
         rows = []
         for lab, key_, lower in KPI_LABELS:
+            if key_ == 'citizen_impact' and S.params.DETOUR_W == 0:       # δ=0이면 못 타는 승객과 같은 값
+                continue
             av, tv = a[key_], k[key_]
             better = None if lower is None or av == tv else ((tv < av) == lower)
             rows.append({'지표': lab, 'AS-IS': av, 'TO-BE': tv, '변화': f'{(tv - av) / av * 100:+.0f}%' if av else '–',

@@ -75,11 +75,13 @@ def test_objective_recomputation_matches_solver(sc):   # 고정 코스 목적함
     assert round(objective(sc, RESULT['tobe']['order'])) == pytest.approx(38336, abs=2)
 
 
-@pytest.mark.parametrize('version', ['v1', 'v3'])
+@pytest.mark.parametrize('version', ['v1', 'v3', 'v3-detour'])
 def test_milp_objective_equals_recomputation(net, net_v3, version):
     """경로가 하나뿐인 회랑(저장된 코스의 arc만)에서 MILP를 풀면, 솔버 목적함수 = objective() 재계산이어야 한다.
     → 모델 수식과 재계산 함수가 같은 식임을 v1(노트북)·v3(일요일 수요 + 실측 노선 우회 승객) 모두에서 확인"""
-    sc_ = Scenario(net, DEFAULT) if version == 'v1' else Scenario(net_v3, V3)
+    sc_ = {'v1': lambda: Scenario(net, DEFAULT),                              # 노트북 (노선 1개 = 60점)
+           'v3': lambda: Scenario(net_v3, V3),                                 # 서비스 기본: 일요일 수요, 못 타는 승객만
+           'v3-detour': lambda: Scenario(net_v3, V3.with_(DETOUR_W=0.2))}[version]()   # 선택: 우회 노선 영향 반영
     order = RESULT['tobe']['order']
     corridor = sorted(set(order) | {int(net.REV[a]) for a in order})   # 반대 방향 포함(쌍 벌점 판정용) — 경로는 여전히 하나
     out, info = solve_milp(sc_, corridor, time_limit=60)
