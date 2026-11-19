@@ -105,7 +105,8 @@ with st.sidebar:
     with st.form('cond'):
         start = st.text_input('출발지', p.START_NAME)
         finish = st.text_input('도착지', p.FINISH_NAME)
-        t0 = st.slider('출발 시각', 6.0, 10.0, float(p.T0), 0.5, format='%.1f시')
+        T_OPTS = [6.0 + 0.5 * i for i in range(9)]
+        t0 = st.select_slider('출발 시각', T_OPTS, value=float(p.T0) if float(p.T0) in T_OPTS else 7.5, format_func=hm)
         simple = st.select_slider('코스 단순성 (꺾임 벌점 배율)', [0.5, 1.0, 2.0, 3.0], value=round(p.TURN[0] / DEFAULT.TURN[0], 1)
                                   if round(p.TURN[0] / DEFAULT.TURN[0], 1) in (0.5, 1.0, 2.0, 3.0) else 1.0)
         go = st.form_submit_button('최적 코스 계산', type='primary', width='stretch')
@@ -206,23 +207,26 @@ with left:
         pts += [dict(name=f"↩ {w['name'].replace('(반환)', '')} 반환", pos=[w['coord'][1], w['coord'][0]], color=[235, 104, 52])
                 for w in (load_frozen(eng.data_dir) or {}).get('waypoints', []) if '반환' in w['name'] and '대림상가' not in w['name']]
     zones = [dict(name=f'금지 · {z.name}', pos=[z.coord[1], z.coord[0]], r=z.r) for z in S.params.FORBID]
+    for x in pts + zones:                            # 마우스를 올리면 이름이 뜬다 (지도 글자 레이어는 한글 초기화 오류로 쓰지 않음)
+        x['info'] = x['name']
     layers = [
         pdk.Layer('PathLayer', paths, get_path='path', get_color=[255, 255, 255], width_min_pixels=7),     # 흰 테두리 (겹침 구분)
         pdk.Layer('PathLayer', paths, get_path='path', get_color='color', width_min_pixels=4, pickable=True),
         pdk.Layer('ScatterplotLayer', zones, get_position='pos', get_radius='r', get_fill_color=[82, 81, 78, 50],
                   get_line_color=[82, 81, 78], stroked=True, line_width_min_pixels=1, pickable=True),
-        pdk.Layer('ScatterplotLayer', pts, get_position='pos', get_fill_color='color', get_radius=60, radius_min_pixels=5,
+        pdk.Layer('ScatterplotLayer', pts, get_position='pos', get_fill_color='color', get_radius=70, radius_min_pixels=6,
                   get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=2, pickable=True),
-        pdk.Layer('TextLayer', pts + zones, get_position='pos', get_text='name', get_size=13, get_color=[11, 11, 11],
-                  get_pixel_offset=[0, -16], character_set='auto', font_family='"Malgun Gothic", "Noto Sans KR", sans-serif',
-                  background=True, get_background_color=[255, 255, 255, 220]),
     ]
     st.pydeck_chart(pdk.Deck(layers=layers, map_provider='carto', map_style='light',
                              initial_view_state=pdk.ViewState(latitude=37.535, longitude=127.05, zoom=11.2),
-                             tooltip={'text': '{info}{name}'}), height=520)
+                             tooltip={'text': '{info}'}), height=520)
     st.markdown(f"<span style='color:{C_ASIS}'>━━</span> AS-IS (2026 JTBC 공식 코스)&nbsp;&nbsp;&nbsp;"
                 f"<span style='color:{C_TOBE}'>━━</span> TO-BE (RunWay 최적 코스)&nbsp;&nbsp;&nbsp;"
-                f"<span style='color:{C_ASIS};opacity:.6'>━━</span> AS-IS 반환 구간(왔던 길로 되돌아옴, 옆으로 띄워 표시)", unsafe_allow_html=True)
+                f"<span style='color:{C_ASIS};opacity:.6'>━━</span> AS-IS 반환 구간(왔던 길로 되돌아옴, 옆으로 띄워 표시)<br>"
+                f"<span style='color:#0b0b0b'>●</span> 출발 {S.params.START_NAME} · 도착 {S.params.FINISH_NAME}&nbsp;&nbsp;&nbsp;"
+                f"<span style='color:{C_ASIS}'>●</span> AS-IS 반환 지점 (비우당교 · 학여울역 · 둔촌사거리)&nbsp;&nbsp;&nbsp;"
+                f"<span style='color:#52514e'>◯</span> 금지 구간 (건국대병원 앞)&nbsp;&nbsp;·&nbsp;&nbsp;점·선에 마우스를 올리면 이름과 KPI가 보입니다",
+                unsafe_allow_html=True)
 
     t1, t2, t3, t4 = st.tabs(['KPI 비교', '코스 도로별', '영향 버스 노선', 'AS-IS 문제점'])
     with t1:
