@@ -98,7 +98,9 @@ class Engine:
                     roads=road_table(ev, 300).to_dict('records'), geojson=to_geojson_feature(sc, order, name, ev),
                     order=[int(a) for a in order],
                     violations=validate_course(sc, order, check_identity=name != 'AS-IS', check_endpoints=name != 'AS-IS'),
-                    objective=round(objective(sc, order)), snap_m=sc.snap_m, solver=info or {})
+                    objective=round(objective(sc, order)),                      # MILP 식 그대로 (솔버 값과 일치)
+                    objective_exact=round(objective(sc, order, exact=True)),    # 승객 항목 정밀 평가 — 교체 판단 기준
+                    snap_m=sc.snap_m, solver=info or {})
 
     def asis(self, p: Params = DEFAULT) -> dict:
         """AS-IS(2026 JTBC 코스)를 조건 p(출발 시각 등)로 평가. 출발·도착은 공식 코스 그대로."""
@@ -119,9 +121,9 @@ class Engine:
         return None
 
     def _save_if_better(self, p: Params, res: dict) -> dict:
-        """목적함수(같은 조건에서 직접 다시 계산한 값)가 더 작을 때만 교체"""
+        """정밀 목적함수(화면 KPI와 같은 승객 평가 + 같은 벌점)가 더 작을 때만 교체 — 발표 숫자가 나빠지지 않게"""
         old = self.cached(p)
-        if old and old.get('objective') is not None and old['objective'] <= res['objective']:
+        if old and old.get('objective_exact') is not None and old['objective_exact'] <= res['objective_exact']:
             return old
         with open(self._path(p), 'w', encoding='utf-8') as fh:
             json.dump(res, fh, ensure_ascii=False, default=float)
@@ -136,7 +138,7 @@ class Engine:
                 p = Params.model_validate(r['params'])
             except (OSError, ValueError, KeyError):       # 다른 프로세스가 쓰는 중이거나 옛 형식
                 continue
-            out.append(dict(조건=describe_params(p), params=p, kpi=r['kpi'], 목적함수=r.get('objective'), order=r['order']))
+            out.append(dict(조건=describe_params(p), params=p, kpi=r['kpi'], 목적함수=r.get('objective_exact', r.get('objective')), order=r['order']))
         return out
 
     def refresh_store(self) -> int:

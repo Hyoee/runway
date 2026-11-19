@@ -102,17 +102,24 @@ def compare(ev_a: dict, ev_b: dict, names=('AS-IS', 'TO-BE')) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def objective(sc: Scenario, order) -> float:
-    """고정된 코스의 MILP 목적함수 값(5-4식)을 직접 계산 — 다른 조건에서 찾은 해를 같은 기준으로 비교할 때 쓴다"""
+def objective(sc: Scenario, order, exact: bool = False) -> float:
+    """고정된 코스의 목적함수 값(5-4식)을 직접 계산 — 다른 조건에서 찾은 해를 같은 기준으로 비교할 때 쓴다.
+
+    exact=False: MILP와 똑같은 식 (승객 피해를 3km 구간대 평균으로 근사) — 솔버 결과 검증용
+    exact=True : 승객 항목만 화면 KPI와 같은 정밀 평가(10m 단위 통제 시간)로 바꾼 값 — '더 좋은 코스' 판단에 쓴다
+                 (구간대 근사 때문에 MILP 값은 더 작아도 실제 못 타는 승객은 더 많은 코스가 생길 수 있어서)"""
     from .model import tau
     net, P = sc.net, sc.p
     B = P.BAND_KM * 1000
     used = {int(net.SEG[a]) for a in order}
     km, f = 0.0, 0.0
+    if exact:
+        ev = evaluate(sc, order)
+        f += ev['riders'] + P.DETOUR_W * ev['detour_riders']                         # ①② 정밀 평가
     for a in order:                                                                  # ① 승객 피해 (구간대 평균) ⑥ 정체성 보상
         b = int(km // B)
         lo, hi = b * B, min((b + 1) * B, P.LMAX)
-        if net.vol[a].sum() > 0:
+        if net.vol[a].sum() > 0 and not exact:
             f += sc.band_cost(a, lo, hi)
         for k, lm in enumerate(P.IDENTITY):
             if lo >= lm.a and hi <= lm.b:
@@ -120,7 +127,7 @@ def objective(sc: Scenario, order) -> float:
         f += P.EPS_LEN * net.hw_w[a] * net.Lm[a]                                     # ⑤ 거리
         km += net.Lm[a]
     f += P.ALPHA * len({r for a in order for r in net.seg_routes[a]})                # ② 영향 노선 (v1)
-    if P.DETOUR_W > 0:                                                               # ② 우회 노선 이용객 (v2, MILP 식 10'과 동일)
+    if P.DETOUR_W > 0 and not exact:                                                 # ② 우회 노선 이용객 (v2, MILP 식 10'과 동일)
         dmax, km = {}, 0.0
         for a in order:
             if net.vol[a].sum() > 0 or sc.VK[:, a].max() > 1:                     # MILP에서 y_{e,b}가 있는 arc
