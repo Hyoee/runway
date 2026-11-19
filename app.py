@@ -7,28 +7,20 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import sys
 from pathlib import Path
 
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
-from agent import MODEL, Session, make_tools, run_turn, unverified_numbers
-from runway import DEFAULT, Engine
-from runway.engine import describe_params
-from runway.evaluate import KPI_LABELS
-
 ROOT = Path(__file__).resolve().parent
-C_ASIS, C_TOBE = '#eb6834', '#2a78d6'          # 검증된 기본 팔레트 1·2번 (노트북과 동일)
-
-st.set_page_config(page_title='RunWay — 마라톤 코스 최적화', page_icon='🏃', layout='wide')
 
 
-# ───────────────────────── 공용 자원 ─────────────────────────
 def code_version() -> str:
     """엔진·에이전트 소스의 해시 — 새 코드가 배포되면 값이 바뀐다"""
-    import hashlib
     h = hashlib.sha1()
     for f in sorted([*(ROOT / 'runway').glob('*.py'), *(ROOT / 'agent').glob('*.py')]):
         h.update(f.read_bytes())
@@ -36,6 +28,27 @@ def code_version() -> str:
 
 
 VERSION = code_version()
+# Streamlit Cloud는 git push 뒤 app.py만 다시 실행하고, 이미 import한 패키지는 메모리에 옛 버전으로 남겨 둔다.
+# 그러면 새 화면 코드가 옛 Params(DETOUR_W 없음)를 써서 AttributeError가 난다 → 소스가 바뀌었으면 지우고 다시 import.
+_loaded = sys.modules.get('runway')
+if _loaded is not None and getattr(_loaded, '__app_version__', None) != VERSION:      # 표시가 없거나(옛 배포) 다르면
+    for name in [m for m in sys.modules if m.split('.')[0] in ('runway', 'agent')]:
+        del sys.modules[name]
+
+from agent import MODEL, Session, make_tools, run_turn, unverified_numbers  # noqa: E402
+import runway  # noqa: E402
+from runway import DEFAULT, Engine  # noqa: E402
+from runway.engine import describe_params  # noqa: E402
+from runway.evaluate import KPI_LABELS  # noqa: E402
+
+runway.__app_version__ = VERSION
+
+C_ASIS, C_TOBE = '#eb6834', '#2a78d6'          # 검증된 기본 팔레트 1·2번 (노트북과 동일)
+
+st.set_page_config(page_title='RunWay — 마라톤 코스 최적화', page_icon='🏃', layout='wide')
+
+
+# ───────────────────────── 공용 자원 ─────────────────────────
 
 
 @st.cache_resource(show_spinner='도로망·버스 데이터 불러오는 중 (첫 실행 약 20초)…')
