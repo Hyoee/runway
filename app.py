@@ -37,9 +37,10 @@ if _loaded is not None and getattr(_loaded, '__app_version__', None) != VERSION:
 
 from agent import MODEL, Session, make_tools, run_turn, unverified_numbers  # noqa: E402
 import runway  # noqa: E402
-from runway import DEFAULT, Engine  # noqa: E402
+from runway import DEFAULT, Engine, in_bbox  # noqa: E402
 from runway.engine import describe_params  # noqa: E402
 from runway.evaluate import KPI_LABELS  # noqa: E402
+from runway.events import EVENTS, event_of, params_for  # noqa: E402
 
 runway.__app_version__ = VERSION
 
@@ -101,6 +102,12 @@ def hm(t):
 with st.sidebar:
     st.header('조건 카드')
     st.caption('채팅으로 바꿔도 되고, 여기서 직접 바꿔도 됩니다. 같은 엔진이 계산합니다.')
+    ev_keys = list(EVENTS)
+    pick = st.radio('종목', ev_keys, index=ev_keys.index(S.params.EVENT), format_func=lambda k: EVENTS[k].label, horizontal=True)
+    if pick != S.params.EVENT:                         # 종목을 바꾸면 그 종목의 기본 조건으로 (사전 계산되어 즉시)
+        with st.spinner(f'{EVENTS[pick].label} 코스 불러오는 중…'):
+            TOOLS['optimize_course'].call(dict(event=pick))
+        st.rerun()
     p = S.params
     with st.form('cond'):
         start = st.text_input('출발지', p.START_NAME)
@@ -135,7 +142,8 @@ with st.sidebar:
 
     st.divider()
     st.subheader('미리 계산된 시나리오')
-    lib = sorted(eng.library(), key=lambda x: (x['params'] != DEFAULT, x['kpi']['riders']))   # 기본 조건 먼저
+    lib = sorted([x for x in eng.library() if x['params'].EVENT == S.params.EVENT],
+                 key=lambda x: (x['params'] != params_for(S.params.EVENT), x['kpi']['riders']))   # 현재 종목, 기본 조건 먼저
     for i, x in enumerate(lib):
         if st.button(f"{x['조건']} — 못 타는 승객 {x['kpi']['riders']:,}명", key=f'lib{i}', width='stretch'):
             S.params, S.result = x['params'], dict(eng.cached(x['params']), ok=True, cached=True)
@@ -148,14 +156,15 @@ with st.sidebar:
 
 # ───────────────────────── 본문 ─────────────────────────
 st.title('RunWay')
-st.markdown('**버스 승객 피해는 최소로, 코스는 단순하게.** 2026 JTBC 서울마라톤 코스(AS-IS)와 PuLP 최적화 코스(TO-BE) 비교')
-
-R, A = S.result, S.ensure_asis()
+EV = event_of(S.params)
+R, A = S.result, S.ensure_asis()                     # A가 None이면 AS-IS 비교 없음 (종목 프리셋의 asis_file 기준)
+st.markdown(f'**버스 승객 피해는 최소로, 코스는 단순하게.** {EV.label} ' +
+            ('— 2026 JTBC 서울마라톤 코스(AS-IS)와 PuLP 최적화 코스(TO-BE) 비교' if A else '— PuLP 최적화 코스(TO-BE)'))
 left, right = st.columns([3, 2], gap='large')
 
 with left:
     st.caption(f"현재 조건: {describe_params(S.params)}")
-    k, a = R['kpi'], A['kpi']
+    k, a = R['kpi'], (A['kpi'] if A else None)
     cols = st.columns(5)
     tiles = [('못 타는 승객 (명)', 'riders', '정류장이 마라톤 코스에 들어가 통제 시간 동안 버스를 못 타는 승객 (일요일 하루 기준)'),
              ('통제되는 정류장', 'stops', '코스 위에 있어 통제 시간 동안 쓸 수 없는 버스 정류장 수'),
@@ -163,13 +172,19 @@ with left:
              ('방향 전환 45°↑', 'turns', '러너가 외우기 쉬운 단순한 코스일수록 적음'),
              ('통제 필요 교차로', 'junctions', '코스가 지나가 통제 인력이 필요한 교차로 수')]
     for c, (lab, key_, hlp) in zip(cols, tiles):
+        if a is None:                                  # AS-IS 없는 종목: TO-BE 값만
+            c.metric(lab, f'{k[key_]:,}', help=hlp)
+            continue
         d = k[key_] - a[key_]
         pct = f' ({d / a[key_] * 100:+.0f}%)' if a[key_] else ''
         c.metric(lab, f'{k[key_]:,}', f'{d:+,}{pct}' if d else '변화 없음', delta_color='inverse', help=hlp)
-    st.caption('변화는 AS-IS(2026 JTBC 코스) 대비')
+    if A:
+        st.caption(f"변화는 AS-IS({A.get('source', '2026 JTBC 코스')}) 대비")
+    else:
+        st.info('이 종목은 기존 코스 데이터가 없어 비교하지 않습니다.')
 
     # 지도
-    NET = eng.net                                    # 도로 그래프(arc 구성은 수요 기준과 무관하게 같음)
+    NET = eng.network(S.params)                      # 종목 도로망 (10K는 서쪽 도로망)
 
     def _offset(c, d=0.00035):
         """반환(되돌아오는) 구간을 진행 방향 오른쪽으로 약 30m 띄워, 갈 때 선과 겹치지 않게"""
@@ -197,16 +212,19 @@ with left:
                 cur = dict(ret=ret, path=c, name=name, color=rgb + ([170] if ret else [255]),
                            info=info + (' · 반환(왔던 길로 되돌아옴)' if ret else '')); rows.append(cur)
         return rows
-    show = st.radio('지도에 표시', ['둘 다', 'TO-BE만', 'AS-IS만'], horizontal=True, label_visibility='collapsed')
+    show = st.radio('지도에 표시', ['둘 다', 'TO-BE만', 'AS-IS만'], horizontal=True, label_visibility='collapsed') if A else 'TO-BE만'
     paths = (path_rows(A, 'AS-IS', C_ASIS) if show != 'TO-BE만' else []) + (path_rows(R, 'TO-BE', C_TOBE) if show != 'AS-IS만' else [])
     pts = [dict(name=f'출발 · {S.params.START_NAME}', pos=[S.params.START[1], S.params.START[0]], color=[11, 11, 11]),
            dict(name=f'도착 · {S.params.FINISH_NAME}', pos=[S.params.FINISH[1], S.params.FINISH[0]], color=[11, 11, 11])]
     pts += [dict(name=f'★ {lm.name}', pos=[lm.coord[1], lm.coord[0]], color=[82, 81, 78]) for lm in S.params.IDENTITY]
-    if show != 'TO-BE만':                             # AS-IS 공식 반환 지점 (대회 책자 p28~29)
+    turn_pts = []
+    if A and show != 'TO-BE만':                       # AS-IS 공식 반환 지점 (대회 책자)
         from runway.asis import load_frozen
-        pts += [dict(name=f"↩ {w['name'].replace('(반환)', '')} 반환", pos=[w['coord'][1], w['coord'][0]], color=[235, 104, 52])
-                for w in (load_frozen(eng.data_dir) or {}).get('waypoints', []) if '반환' in w['name'] and '대림상가' not in w['name']]
-    zones = [dict(name=f'금지 · {z.name}', pos=[z.coord[1], z.coord[0]], r=z.r) for z in S.params.FORBID]
+        turn_pts = [dict(name=f"↩ {w['name'].replace('(반환)', '')} 반환", pos=[w['coord'][1], w['coord'][0]], color=[235, 104, 52])
+                    for w in (load_frozen(eng.data_dir, EV.asis_file) or {}).get('waypoints', [])
+                    if '반환' in w['name'] and '대림상가' not in w['name']]
+        pts += turn_pts
+    zones = [dict(name=f'금지 · {z.name}', pos=[z.coord[1], z.coord[0]], r=z.r) for z in S.params.FORBID if in_bbox(z.coord, S.params.AREA)]
     for x in pts + zones:                            # 마우스를 올리면 이름이 뜬다 (지도 글자 레이어는 한글 초기화 오류로 쓰지 않음)
         x['info'] = x['name']
     layers = [
@@ -218,21 +236,31 @@ with left:
                   get_line_color=[255, 255, 255], stroked=True, line_width_min_pixels=2, pickable=True),
     ]
     st.pydeck_chart(pdk.Deck(layers=layers, map_provider='carto', map_style='light',
-                             initial_view_state=pdk.ViewState(latitude=37.535, longitude=127.05, zoom=11.2),
+                             initial_view_state=pdk.ViewState(latitude=(EV.area[0] + EV.area[1]) / 2,
+                                                              longitude=(EV.area[2] + EV.area[3]) / 2,
+                                                              zoom=11.2 if EV.distance_m > 15000 else 12.0),
                              tooltip={'text': '{info}'}), height=520)
-    st.markdown(f"<span style='color:{C_ASIS}'>━━</span> AS-IS (2026 JTBC 공식 코스)&nbsp;&nbsp;&nbsp;"
-                f"<span style='color:{C_TOBE}'>━━</span> TO-BE (RunWay 최적 코스)&nbsp;&nbsp;&nbsp;"
-                f"<span style='color:{C_ASIS};opacity:.6'>━━</span> AS-IS 반환 구간(왔던 길로 되돌아옴, 옆으로 띄워 표시)<br>"
-                f"<span style='color:#0b0b0b'>●</span> 출발 {S.params.START_NAME} · 도착 {S.params.FINISH_NAME}&nbsp;&nbsp;&nbsp;"
-                f"<span style='color:{C_ASIS}'>●</span> AS-IS 반환 지점 (비우당교 · 학여울역 · 둔촌사거리)&nbsp;&nbsp;&nbsp;"
-                f"<span style='color:#52514e'>◯</span> 금지 구간 (건국대병원 앞)&nbsp;&nbsp;·&nbsp;&nbsp;점·선에 마우스를 올리면 이름과 KPI가 보입니다",
-                unsafe_allow_html=True)
+    legend = ((f"<span style='color:{C_ASIS}'>━━</span> AS-IS (2026 JTBC 공식 코스)&nbsp;&nbsp;&nbsp;" if A else '')
+              + f"<span style='color:{C_TOBE}'>━━</span> TO-BE (RunWay 최적 코스)&nbsp;&nbsp;&nbsp;"
+              + (f"<span style='color:{C_ASIS};opacity:.6'>━━</span> AS-IS 반환 구간(왔던 길로 되돌아옴, 옆으로 띄워 표시)" if A else '')
+              + '<br>'
+              + f"<span style='color:#0b0b0b'>●</span> 출발 {S.params.START_NAME} · 도착 {S.params.FINISH_NAME}&nbsp;&nbsp;&nbsp;"
+              + (f"<span style='color:{C_ASIS}'>●</span> AS-IS 반환 지점 ({' · '.join(x['name'][2:-3] for x in turn_pts)})&nbsp;&nbsp;&nbsp;"
+                 if turn_pts else '')
+              + ("<span style='color:#52514e'>◯</span> 금지 구간&nbsp;&nbsp;·&nbsp;&nbsp;" if zones else '')
+              + '점·선에 마우스를 올리면 이름과 KPI가 보입니다')
+    st.markdown(legend, unsafe_allow_html=True)
 
-    t1, t2, t3, t4 = st.tabs(['KPI 비교', '코스 도로별', '영향 버스 노선', 'AS-IS 문제점'])
+    tabs = st.tabs(['KPI 비교' if A else 'KPI', '코스 도로별', '영향 버스 노선'] + (['AS-IS 문제점'] if A else []))
+    t1, t2, t3 = tabs[:3]
     with t1:
         rows = []
         for lab, key_, lower in KPI_LABELS:
-            av, tv = a[key_], k[key_]
+            tv = k[key_]
+            if a is None:                              # AS-IS 없는 종목: TO-BE 열만
+                rows.append({'지표': lab, 'TO-BE': tv})
+                continue
+            av = a[key_]
             better = None if lower is None or av == tv else ((tv < av) == lower)
             rows.append({'지표': lab, 'AS-IS': av, 'TO-BE': tv, '변화': f'{(tv - av) / av * 100:+.0f}%' if av else '–',
                          '판정': '' if better is None else ('개선' if better else '악화')})
@@ -240,15 +268,17 @@ with left:
     with t2:
         st.dataframe(pd.DataFrame(R['roads']).rename(columns={'피해': '못 타는 승객'}), hide_index=True, width='stretch')
     with t3:
-        c1, c2 = st.columns(2)
-        for col, res, nm in ((c1, R, 'TO-BE'), (c2, A, 'AS-IS')):
+        cols3 = st.columns(2 if A else 1)
+        for col, res, nm in zip(cols3, (R, A), ('TO-BE', 'AS-IS')):
             col.markdown(f"**{nm} · {len(res['route_list'])}개 노선**")
             col.write(', '.join(res['route_list']))
-    with t4:
-        for v in A['violations']:
-            st.markdown(f'- {v}')
-        st.dataframe(pd.DataFrame(A['km_check']), hide_index=True, width='stretch')
-        st.caption('AS-IS는 공식 경유지를 간선 도로망 위에 옮긴 것이라 모델상 길이가 실제(42.195km)보다 깁니다. km당 피해로도 비교하세요.')
+    if A:
+        with tabs[3]:
+            for v in A['violations']:
+                st.markdown(f'- {v}')
+            st.dataframe(pd.DataFrame(A['km_check']), hide_index=True, width='stretch')
+            st.caption(f"출처: {A.get('source', '')}. 공식 경유지를 간선 도로망 위에 옮긴 것이라 "
+                       f"모델상 길이({A['kpi']['length_km']}km)가 공식 거리와 조금 다릅니다.")
 
 # ───────────────────────── 채팅 ─────────────────────────
 with right:
@@ -256,8 +286,8 @@ with right:
     box = st.container(height=640)
     with box:
         if not st.session_state.chat:
-            st.info('예) "출발을 7시로 당기면?" · "건대입구역 근처는 피해 줘" · "기존 코스는 뭐가 문제야?" · '
-                    '"도착을 잠실종합운동장으로 바꿔 줘"')
+            st.info('예) "출발을 7시로 당기면?" · "기존 코스는 뭐가 문제야?" · "하프로 바꿔 줘" · "10K 코스 보여 줘" · '
+                    '"건대입구역 근처는 피해 줘"')
         for m in st.session_state.chat:
             with st.chat_message(m['role']):
                 st.markdown(m['content'])

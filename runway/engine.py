@@ -30,8 +30,10 @@ def problem_key(p: Params) -> str:
 
 
 def describe_params(p: Params) -> str:
-    """기본값과 다른 조건만 사람이 읽는 문장으로 — UI 라벨과 LLM 맥락에 쓴다"""
-    d, out = DEFAULT, []
+    """종목 기본값과 다른 조건만 사람이 읽는 문장으로 — UI 라벨과 LLM 맥락에 쓴다"""
+    from .events import EVENTS, params_for
+    ev = EVENTS[p.EVENT]
+    d, out = params_for(p.EVENT), []
     if p.START != d.START or p.START_NAME != d.START_NAME:
         out.append(f'출발 {p.START_NAME}')
     if p.FINISH != d.FINISH or p.FINISH_NAME != d.FINISH_NAME:
@@ -52,7 +54,9 @@ def describe_params(p: Params) -> str:
         out.append('우회 영향 미반영 (못 타는 승객만)' if p.DETOUR_W == 0 else f'우회 가중치 δ={p.DETOUR_W:g}')
     if p.DAYTYPE != d.DAYTYPE:
         out.append({'weekend': '수요: 토·일 평균', 'all': '수요: 전체 일평균', 'sunday': '수요: 일요일 평균'}[p.DAYTYPE])
-    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 일요일 07:30)'
+    hm = '%02d:%02d' % (int(d.T0), round(d.T0 % 1 * 60))
+    base = f"기본 조건 ({ev.start_name.replace('광장', '')}→{ev.finish_name}, 일요일 {hm})"
+    return ('' if p.EVENT == 'full' else f'[{ev.label}] ') + (', '.join(out) or base)
 
 
 class Engine:
@@ -87,8 +91,8 @@ class Engine:
                 self._sc.popitem(last=False)
         return sc
 
-    def places(self, query: str, limit: int = 8):
-        return search_places(self.data_dir, query, limit)
+    def places(self, query: str, limit: int = 8, area=None):
+        return search_places(self.data_dir, query, limit, area)
 
     # ── 결과 묶음 (UI·LLM이 쓰는 형태) ──
     def package(self, sc: Scenario, order, name: str, info: dict | None = None) -> dict:
@@ -102,12 +106,18 @@ class Engine:
                     objective_exact=round(objective(sc, order, exact=True)),    # 승객 항목 정밀 평가 — 교체 판단 기준
                     snap_m=sc.snap_m, solver=info or {})
 
-    def asis(self, p: Params = DEFAULT) -> dict:
-        """AS-IS(2026 JTBC 코스)를 조건 p(출발 시각 등)로 평가. 출발·도착은 공식 코스 그대로."""
-        sc = self.scenario(p.with_(START=DEFAULT.START, FINISH=DEFAULT.FINISH))
-        order, chk = frozen_asis(sc, self.data_dir)          # 고정된 공식 코스 (data/asis_2026_official.json)
+    def asis(self, p: Params = DEFAULT) -> dict | None:
+        """종목의 고정된 공식 AS-IS를 조건 p(출발 시각 등)로 평가. 출발·도착은 공식 코스 그대로.
+        AS-IS가 없는 종목(프리셋 asis_file 없음)은 None — 화면·에이전트는 이 값으로 비교 여부를 정한다."""
+        from .events import event_of
+        ev = event_of(p)
+        if not ev.has_asis:
+            return None
+        sc = self.scenario(p.with_(START=ev.start, FINISH=ev.finish, START_NAME=ev.start_name, FINISH_NAME=ev.finish_name))
+        order, chk = frozen_asis(sc, self.data_dir, ev.asis_file)   # 고정된 공식 코스 (data/asis_*_official.json)
         out = self.package(sc, order, 'AS-IS')
         out['km_check'] = chk
+        out['source'] = ev.asis_source
         return out
 
     # ── 캐시 ──
@@ -138,7 +148,8 @@ class Engine:
                 p = Params.model_validate(r['params'])
             except (OSError, ValueError, KeyError):       # 다른 프로세스가 쓰는 중이거나 옛 형식
                 continue
-            out.append(dict(조건=describe_params(p), params=p, kpi=r['kpi'], 목적함수=r.get('objective_exact', r.get('objective')), order=r['order']))
+            out.append(dict(조건=describe_params(p), params=p, kpi=r['kpi'], 목적함수=r.get('objective_exact', r.get('objective')), order=r['order'],
+                            net_key=p.key(*NETWORK_FIELDS[1:])))    # 같은 도로망끼리만 코스를 재사용 (수요 기준 DAYTYPE은 arc에 영향 없음)
         return out
 
     def refresh_store(self) -> int:
@@ -151,8 +162,11 @@ class Engine:
             if res['violations']:
                 f.unlink()                                   # 규칙을 어기는 해는 버린다
                 continue
-            with open(f, 'w', encoding='utf-8') as fh:
+            target = self._path(p)                            # 파라미터 필드가 늘어 키가 바뀌었으면 새 키 파일로 옮긴다
+            with open(target, 'w', encoding='utf-8') as fh:
                 json.dump(res, fh, ensure_ascii=False, default=float)
+            if target != f:
+                f.unlink()
             n += 1
         return n
 
@@ -163,6 +177,10 @@ class Engine:
         tg = [x['params'] for x in lib] + [p for p in targets if all(p != x['params'] for x in lib)]
         for tp in tg:
             for src in lib:
+                if src['net_key'] != tp.key(*NETWORK_FIELDS[1:]):        # 다른 도로망(예: 10K)의 arc 번호는 의미가 다르다
+                    continue
+                if not (tp.LMIN - 1 <= src['kpi']['length_km'] * 1000 <= tp.LMAX + 1):   # 거리가 다른 종목(풀↔하프)은 건너뜀
+                    continue
                 try:
                     sc = self.scenario(tp)
                     res = self.package(sc, src['order'], 'TO-BE', dict(solver='cross-seed', 출처=src['조건']))
@@ -172,9 +190,10 @@ class Engine:
                     n += 1
         return n
 
-    def known_orders(self):
-        """저장된 모든 코스의 arc — 새 풀이의 후보 회랑에 항상 넣는다(회랑이 좁아 좋은 코스를 놓치지 않게)"""
-        return sorted({int(a) for x in self.library() for a in x['order']})
+    def known_orders(self, p: Params = DEFAULT):
+        """같은 도로망에 저장된 모든 코스의 arc — 새 풀이의 후보 회랑에 항상 넣는다(회랑이 좁아 좋은 코스를 놓치지 않게)"""
+        k = p.key(*NETWORK_FIELDS[1:])
+        return sorted({int(a) for x in self.library() if x['net_key'] == k for a in x['order']})
 
     def seed(self, p: Params, order, info: dict, name='TO-BE') -> dict:
         """다른 곳에서 구한 해(노트북 결과 등)를 캐시에 넣는다 — 제약 검사를 통과해야만"""
@@ -195,7 +214,7 @@ class Engine:
             t0 = time.time()
             prev = self.cached(p)
             order, info, _ = optimize(sc, time_limit=time_limit, gap=gap, progress=progress,
-                                      extra=set(prev['order'] if prev else ()) | set(self.known_orders()))
+                                      extra=set(prev['order'] if prev else ()) | set(self.known_orders(p)))
         except ScenarioError as e:
             return dict(ok=False, reason=str(e))
         if order is None:

@@ -13,6 +13,7 @@ from anthropic import beta_tool
 
 from runway import DEFAULT, Engine, Forbid, Params
 from runway.engine import describe_params
+from runway.events import EVENTS, event_of, params_for, parse_event
 
 INTERACTIVE_TIME_LIMIT = 120     # 채팅 중 새 조건 풀이 시간 제한(초)
 INTERACTIVE_GAP = 0.02
@@ -28,8 +29,10 @@ class Session:
     progress: Callable[[str], None] = lambda m: None
 
     def ensure_asis(self):
-        if self.asis is None or self.asis['params']['T0'] != self.params.T0:
-            self.asis = self.engine.asis(self.params)
+        """현재 종목의 AS-IS — 종목 프리셋에 AS-IS가 없으면 None (비교하지 않음)"""
+        key = (self.params.EVENT, self.params.T0)
+        if getattr(self, '_asis_key', None) != key:
+            self.asis, self._asis_key = self.engine.asis(self.params), key
         return self.asis
 
 
@@ -47,28 +50,34 @@ def _pct(a, b):
 
 
 def summarize(s: Session, res: dict) -> dict:
-    """LLM에게 돌려줄 요약 — AS-IS 대비 변화 포함"""
-    a = s.ensure_asis()['kpi']
+    """LLM에게 돌려줄 요약 — AS-IS가 있는 종목만 AS-IS 대비 변화를 넣는다 (없는 종목은 비교 키 자체가 없음)"""
+    A = s.ensure_asis()
     k = res['kpi']
-    return dict(
-        조건=describe_params(Params.model_validate(res['params'])),
-        캐시결과=res.get('cached', False),
-        KPI={x: k[x] for x in KEY_KPI},
-        AS_IS_KPI={x: a[x] for x in KEY_KPI},
-        AS_IS대비_변화율_퍼센트={x: _pct(a[x], k[x]) for x in ('riders', 'stops', 'routes', 'turns', 'junctions')},
+    p = Params.model_validate(res['params'])
+    out = dict(종목=event_of(p).label, 조건=describe_params(p), 캐시결과=res.get('cached', False), KPI={x: k[x] for x in KEY_KPI})
+    if A:
+        a = A['kpi']
+        out.update(AS_IS_KPI={x: a[x] for x in KEY_KPI},
+                   AS_IS대비_변화율_퍼센트={x: _pct(a[x], k[x]) for x in ('riders', 'stops', 'routes', 'turns', 'junctions')},
+                   AS_IS_출처=A.get('source', ''))
+    else:
+        out['비교'] = '이 종목은 기존 코스(AS-IS) 데이터가 없어 비교하지 않음 — AS-IS 대비 표현을 쓰지 말 것'
+    out.update(
         지표_뜻=KPI_MEANING,
         주요도로=[f"{r['km']}km {r['도로']} {r['길이km']}km" for r in res['roads'][:12]],
         출발도착_교차로까지_거리m=res.get('snap_m'),
         솔버=dict((x, res['solver'].get(x)) for x in ('solver', '목적함수', '해 종류', '초', 'gap') if x in res['solver']),
     )
+    return out
 
 
-def _resolve(s: Session, query: str):
-    """장소 이름 → (이름, 좌표) 또는 후보 목록(애매할 때)"""
-    c = [h for h in s.engine.places(query) if h['in_area']]
+def _resolve(s: Session, query: str, area=None):
+    """장소 이름 → (이름, 좌표) 또는 후보 목록(애매할 때). area: 종목의 분석 영역"""
+    area = area or s.params.AREA
+    c = [h for h in s.engine.places(query, area=area) if h['in_area']]
     if not c:
-        out = s.engine.places(query)
-        return None, dict(error=f"'{query}'를 분석 영역(서울 도심~송파) 안에서 찾지 못했습니다.",
+        out = s.engine.places(query, area=area)
+        return None, dict(error=f"'{query}'를 이 종목의 분석 영역 안에서 찾지 못했습니다.",
                           영역밖_후보=[h['name'] for h in out[:5]])
     if c[0]['match'] == 'exact' or len(c) == 1:
         return c[0], None
@@ -88,17 +97,18 @@ def make_tools(s: Session) -> list:
         Args:
             query: 장소 이름 (예: '서울시청', '잠실종합운동장', '건대입구역')
         """
-        hits = s.engine.places(query, 8)
+        hits = s.engine.places(query, 8, area=s.params.AREA)      # 분석영역안 = 현재 종목 영역 기준
         return record('search_place', dict(query=query), dict(후보=[dict(이름=h['name'], 좌표=h['coord'], 분석영역안=h['in_area']) for h in hits]))
 
     @beta_tool
-    def optimize_course(start_place: str | None = None, finish_place: str | None = None, start_hour: float | None = None,
-                        add_forbidden_place: str | None = None, forbidden_radius_m: float = 150.0,
+    def optimize_course(event: str | None = None, start_place: str | None = None, finish_place: str | None = None,
+                        start_hour: float | None = None, add_forbidden_place: str | None = None, forbidden_radius_m: float = 150.0,
                         clear_forbidden: bool = False, simplicity: float | None = None, reset: bool = False) -> str:
         """현재 조건에서 바꿀 값만 받아 PuLP MILP로 최적 코스를 계산한다. 같은 조건을 이전에 풀었으면 즉시 돌려준다.
         새 조건이면 최대 2분 걸린다. 결과는 AS-IS(2026 JTBC 코스) 대비 변화율을 포함한다.
 
         Args:
+            event: 종목 — 'full'(풀코스), 'half'(하프), '10k'(10K). "하프로", "10킬로", "10K 코스" 같은 말이면 지정. 바꾸면 그 종목의 기본 조건에서 시작
             start_place: 새 출발지 이름 (장소 데이터에서 정확히 찾을 수 있는 이름)
             finish_place: 새 도착지 이름
             start_hour: 출발 시각(시, 예: 7.0 = 07:00, 7.5 = 07:30). 5~12 사이
@@ -106,15 +116,21 @@ def make_tools(s: Session) -> list:
             forbidden_radius_m: 금지 반경(m), 기본 150
             clear_forbidden: True면 기존 금지 구간을 모두 해제
             simplicity: 방향 전환 벌점 배율. 1이 기본, 2면 꺾임을 두 배로 싫어함(더 단순한 코스), 0.5면 덜 신경 씀
-            reset: True면 모든 조건을 기본값(광화문→올림픽공원, 일요일 07:30)으로 되돌린 뒤 나머지 값을 적용
+            reset: True면 현재 종목의 기본 조건으로 되돌린 뒤 나머지 값을 적용
         """
-        args = {k: v for k, v in dict(start_place=start_place, finish_place=finish_place, start_hour=start_hour,
+        args = {k: v for k, v in dict(event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour,
                                       add_forbidden_place=add_forbidden_place, clear_forbidden=clear_forbidden,
                                       simplicity=simplicity, reset=reset).items() if v not in (None, False)}
-        p, upd = (DEFAULT if reset else s.params), {}
+        ev_key = s.params.EVENT
+        if event:
+            ev_key = event if event in EVENTS else parse_event(event)
+            if ev_key is None:
+                return record('optimize_course', args, dict(ok=False, error=f"종목 '{event}'를 알 수 없습니다. 풀코스·하프·10K 중에서 고르세요."))
+        p = params_for(ev_key) if (reset or ev_key != s.params.EVENT) else s.params
+        upd = {}
         for key, nm_key, q in (('START', 'START_NAME', start_place), ('FINISH', 'FINISH_NAME', finish_place)):
             if q:
-                hit, err = _resolve(s, q)
+                hit, err = _resolve(s, q, p.AREA)
                 if err:
                     return record('optimize_course', args, dict(ok=False, **err))
                 upd[key], upd[nm_key] = hit['coord'], hit['name']
@@ -122,7 +138,7 @@ def make_tools(s: Session) -> list:
             upd['T0'] = float(start_hour)
         forb = () if clear_forbidden else tuple(p.FORBID)
         if add_forbidden_place:
-            hit, err = _resolve(s, add_forbidden_place)
+            hit, err = _resolve(s, add_forbidden_place, p.AREA)
             if err:
                 return record('optimize_course', args, dict(ok=False, **err))
             forb += (Forbid(name=hit['name'], coord=hit['coord'], r=forbidden_radius_m),)
@@ -151,8 +167,11 @@ def make_tools(s: Session) -> list:
 
     @beta_tool
     def get_asis_problems() -> str:
-        """2026 JTBC 서울마라톤 기존 코스(AS-IS)의 KPI와, TO-BE 규칙(공인 거리·왕복 금지 등)을 어긴 점을 돌려준다."""
+        """현재 종목의 기존 코스(AS-IS, 2026 JTBC 서울마라톤 공식 코스)의 KPI와 TO-BE 규칙(공인 거리·회귀 금지 등)을 어긴 점.
+        AS-IS가 없는 종목이면 비교할 수 없다고 돌려준다."""
         a = s.ensure_asis()
+        if a is None:
+            return record('get_asis_problems', {}, dict(ok=False, 비교='이 종목은 기존 코스(AS-IS) 데이터가 없어 비교하지 않습니다.'))
         return record('get_asis_problems', {}, dict(KPI={x: a['kpi'][x] for x in KEY_KPI}, 규칙_위반=a['violations'],
                                                    공식_km표지_대조=a['km_check'], 주요도로=[f"{r['km']}km {r['도로']} 못 타는 승객 {r['피해']}명" for r in a['roads']]))
 
@@ -165,14 +184,15 @@ def make_tools(s: Session) -> list:
         """
         r = s.ensure_asis() if course.upper() == 'AS-IS' else s.result
         if r is None:
-            return record('get_affected_bus_routes', dict(course=course), dict(ok=False, error='코스 없음'))
+            msg = '이 종목은 기존 코스(AS-IS) 데이터가 없습니다' if course.upper() == 'AS-IS' else '코스 없음'
+            return record('get_affected_bus_routes', dict(course=course), dict(ok=False, error=msg))
         return record('get_affected_bus_routes', dict(course=course), dict(ok=True, 노선수=len(r['route_list']), 노선=r['route_list']))
 
     @beta_tool
     def list_precomputed_scenarios() -> str:
         """미리 계산해 둔 시나리오(출발 시각별·코스 단순성별)의 KPI 표. 조건을 바꾸면 어떻게 달라지는지 질문에 쓴다."""
-        lib = s.engine.library()
-        return record('list_precomputed_scenarios', {}, dict(지표_뜻=KPI_MEANING, 시나리오=[dict(
+        lib = [x for x in s.engine.library() if x['params'].EVENT == s.params.EVENT]     # 현재 종목만
+        return record('list_precomputed_scenarios', {}, dict(종목=event_of(s.params).label, 지표_뜻=KPI_MEANING, 시나리오=[dict(
             조건=x['조건'], 못타는승객=x['kpi']['riders'], 통제정류장=x['kpi']['stops'], 영향노선=x['kpi']['routes'],
             방향전환=x['kpi']['turns'], 길이km=x['kpi']['length_km']) for x in lib]))
 

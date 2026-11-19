@@ -30,7 +30,7 @@ def _table(data_dir: str) -> pd.DataFrame:
     return g
 
 
-def search_places(data_dir, query: str, limit: int = 8) -> list[dict]:
+def search_places(data_dir, query: str, limit: int = 8, area=None) -> list[dict]:
     """후보 목록 [{name, coord, in_area, match}] — match: exact > prefix > contains"""
     q = _norm(query)
     if not q:
@@ -41,7 +41,7 @@ def search_places(data_dir, query: str, limit: int = 8) -> list[dict]:
     for r in g.itertuples():
         m = 'exact' if r.key == q else 'prefix' if r.key.startswith(q) else 'contains' if q in r.key else None
         if m:
-            hits.append(dict(name=r.정류소명, coord=(round(r.lat, 6), round(r.lon, 6)), in_area=in_bbox((r.lat, r.lon)), match=m))
+            hits.append(dict(name=r.정류소명, coord=(round(r.lat, 6), round(r.lon, 6)), in_area=in_bbox((r.lat, r.lon), area), match=m))
     hits.sort(key=lambda h: (rank[h['match']], not h['in_area'], len(h['name'])))
     # 서로 300m 안의 후보는 하나로 (같은 장소의 여러 정류소 이름)
     out = []

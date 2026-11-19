@@ -117,13 +117,17 @@ class Network:
 
 
 # ───────────────────────── Step 1. 데이터 ─────────────────────────
-def load_data(data_dir: Path, daytype: str):
+def load_data(data_dir: Path, daytype: str, osm_files=('osm_roads.json',)):
     agg = pd.read_csv(data_dir / 'bus_stop_agg_202610.csv', dtype={'ars': str}, encoding='utf-8-sig')
     agg['ars'] = agg['ars'].str.zfill(5)
     xy = pd.read_excel(data_dir / 'bus_stop_xy_20260902.xlsx')
     xy['ars'] = xy['ARS_ID'].astype(int).astype(str).str.zfill(5)
-    osm = json.load(open(data_dir / 'osm_roads.json', encoding='utf-8'))
-    tunnel = set(int(x) for x in open(data_dir / 'tunnel_way_ids.txt').read().strip().split(','))
+    osm, tunnel = {'nodes': {}, 'ways': []}, set()
+    for fn in osm_files:                               # 종목별 도로망 파일 (풀코스·하프: osm_roads.json, 10K: osm_roads_west.json)
+        o = json.load(open(data_dir / fn, encoding='utf-8'))
+        osm['nodes'].update(o['nodes']); osm['ways'] += o['ways']
+        tf = data_dir / fn.replace('osm_roads', 'tunnel_way_ids').replace('.json', '.txt')
+        tunnel |= set(int(x) for x in open(tf).read().strip().split(',') if x)
 
     dt = pd.read_csv(data_dir / 'bus_stop_daytype_202610.csv', dtype={'ars': str}, encoding='utf-8-sig')
     dt['ars'] = dt['ars'].str.zfill(5); dt = dt.groupby('ars', as_index=False).sum()
@@ -140,7 +144,7 @@ def load_data(data_dir: Path, daytype: str):
 
 
 # ───────────────────────── Step 2. 도로 그래프 ─────────────────────────
-def _build_segments(osm, tunnel, allnodes, junction_r):
+def _build_segments(osm, tunnel, allnodes, junction_r, keep_points=(DEFAULT.START, DEFAULT.FINISH)):
     G = nx.Graph()
     for w in osm['ways']:
         if w['hw'] not in KEEP or any(x in w['name'] for x in EXCLUDE):
@@ -209,8 +213,7 @@ def _build_segments(osm, tunnel, allnodes, junction_r):
             best[k] = s
     segs = list(best.values())
     # 기본 출발·도착 교차로는 축약하지 않는다(노트북과 동일). 다른 출발·도착은 가장 가까운 교차로를 쓴다.
-    keep_node = {rep_of.get(n) for n in [min(nodes, key=lambda n: hav(nodes[n], DEFAULT.START)),
-                                          min(nodes, key=lambda n: hav(nodes[n], DEFAULT.FINISH))]}
+    keep_node = {rep_of.get(n) for n in [min(nodes, key=lambda n: hav(nodes[n], kp)) for kp in keep_points]}   # 종목 출발·도착
     while True:
         inc = {}
         for i, s in enumerate(segs):
@@ -239,10 +242,10 @@ def _build_segments(osm, tunnel, allnodes, junction_r):
     return segs, nodes
 
 
-def _snap_stops(segs, agg, xy, allnodes):
+def _snap_stops(segs, agg, xy, allnodes, area=(37.470, 37.600, 126.955, 127.150)):
     """2-4) 정류장 → 구간 (35m 이내)"""
     st = agg.merge(xy[['ars', 'X좌표', 'Y좌표']], on='ars', how='inner')
-    st = st[st['Y좌표'].between(37.470, 37.600) & st['X좌표'].between(126.955, 127.150)].copy()
+    st = st[st['Y좌표'].between(area[0], area[1]) & st['X좌표'].between(area[2], area[3])].copy()
     kx, ky = 111320 * math.cos(math.radians(37.55)), 110540
     A, B, SID = [], [], []
     for s in segs:
@@ -371,10 +374,10 @@ def _shape_features(net: Network, near_r, return_r=500.0, revisit_r=300.0):
 
 # ───────────────────────── 조립 + 캐시 ─────────────────────────
 def build_network(data_dir: Path, p: Params = DEFAULT) -> Network:
-    agg, xy, osm, tunnel = load_data(data_dir, p.DAYTYPE)
+    agg, xy, osm, tunnel = load_data(data_dir, p.DAYTYPE, p.OSM)
     allnodes = {int(k): tuple(v) for k, v in osm['nodes'].items()}
-    segs, nodes = _build_segments(osm, tunnel, allnodes, p.JUNCTION_R)
-    n_area, n_snap = _snap_stops(segs, agg, xy, allnodes)
+    segs, nodes = _build_segments(osm, tunnel, allnodes, p.JUNCTION_R, p.KEEP_POINTS)
+    n_area, n_snap = _snap_stops(segs, agg, xy, allnodes, p.AREA)
 
     arcs = []
     for s in segs:

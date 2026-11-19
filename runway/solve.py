@@ -93,6 +93,12 @@ def optimize(sc: Scenario, time_limit=None, gap=None, extra=(), progress: Progre
     corr = sorted({b for a in keep for b in (a, int(net.REV[a])) if sc.OK_A[b]})
     say(f'② 후보 회랑 {len(corr)}개 arc 위에서 MILP 푸는 중 (최대 {time_limit or P.TIME_LIMIT:.0f}초)')
     order, info = solve_milp(sc, corr, time_limit=time_limit, gap=gap)
+    if order is None and len(corr) < len(A_all):
+        # 회랑이 좁아 해가 없을 수 있다 (짧은 종목에서 실제로 발생) → 전체 후보 도로로 다시 푼다
+        say(f'회랑 안에 해가 없어 전체 후보 도로(arc {len(A_all):,}개)로 다시 푸는 중')
+        order, info = solve_milp(sc, A_all, time_limit=time_limit, gap=gap)
+        info['회랑_대체'] = '회랑에 해 없음 → 전체 후보 도로로 풀이'
+        corr = A_all
     info.update(LP하한=info_lp['목적함수'], LP초=info_lp['초'], LP상태=info_lp['상태'], 회랑arc=len(corr), 전체arc=len(A_all))
     say(f"완료: {info['해 종류']}, {info['초']}초")
     return order, info, corr

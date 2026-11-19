@@ -28,8 +28,8 @@ class Scenario:
         if getattr(net, 'daytype', p.DAYTYPE) != p.DAYTYPE:
             raise ValueError(f'네트워크 수요 기준({net.daytype})과 조건(DAYTYPE={p.DAYTYPE})이 다릅니다 — load_network(data, p)로 만드세요')
         for nm, ll in (('출발지', p.START), ('도착지', p.FINISH)):
-            if not in_bbox(ll):
-                raise ScenarioError(f'{nm} {ll}가 분석 영역(서울 도심~송파, 위도 37.47~37.60, 경도 126.955~127.15) 밖입니다.')
+            if not in_bbox(ll, p.AREA):
+                raise ScenarioError(f'{nm} {ll}가 이 종목의 분석 영역(위도 {p.AREA[0]}~{p.AREA[1]}, 경도 {p.AREA[2]}~{p.AREA[3]}) 밖입니다.')
         self.S, dS = net.nearest(p.START)
         self.F, dF = net.nearest(p.FINISH)
         if dS > MAX_SNAP_M or dF > MAX_SNAP_M:
@@ -141,7 +141,7 @@ class Scenario:
     def inside(self) -> np.ndarray:
         """arc의 모든 점이 정류장 데이터 영역(BBOX) 안인가"""
         net = self.net
-        return np.array([all(in_bbox(net.allnodes[n]) for n in net.segs[net.SEG[a]]['path']) for a in range(net.NA)], dtype=bool)
+        return np.array([all(in_bbox(net.allnodes[n], self.p.AREA) for n in net.segs[net.SEG[a]]['path']) for a in range(net.NA)], dtype=bool)
 
     def check_feasible_basics(self):
         """솔버를 돌리기 전에 확실히 안 되는 조건을 빠르게 거른다"""
@@ -151,7 +151,7 @@ class Scenario:
         if d > self.p.LMAX:
             raise ScenarioError(f'출발→도착 최단거리 {d/1000:.1f}km가 코스 최대 길이 {self.p.LMAX/1000:.1f}km보다 깁니다.')
         for lm in self.p.IDENTITY:
-            if not in_bbox(lm.coord):
+            if not in_bbox(lm.coord, self.p.AREA):
                 raise ScenarioError(f"랜드마크 '{lm.name}'가 분석 영역 밖입니다.")
 
     # ── 우회 노선 영향 (v2) ──
@@ -182,4 +182,5 @@ class Scenario:
     def band_cost(self, a, lo, hi):
         st = self.p.STEP
         k0, k1 = int(max(lo, self.lo_a[a]) // st), int(min(hi, self.hi_a[a], self.p.LMAX) // st)
+        k0 = min(max(k0, 0), self.K)                     # 이 종목 거리 범위 밖이면 끝 칸 (빈 구간 평균 NaN 방지)
         return float(self.RID[a, k0:max(k1, k0) + 1].mean())

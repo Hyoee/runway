@@ -18,8 +18,10 @@ LatLon = tuple[float, float]
 BBOX = dict(lat_min=37.470, lat_max=37.600, lon_min=126.955, lon_max=127.150)
 
 
-def in_bbox(ll: LatLon) -> bool:
-    return BBOX['lat_min'] <= ll[0] <= BBOX['lat_max'] and BBOX['lon_min'] <= ll[1] <= BBOX['lon_max']
+def in_bbox(ll: LatLon, area=None) -> bool:
+    """area: (위도 최소, 위도 최대, 경도 최소, 경도 최대). 없으면 풀코스 영역(BBOX)"""
+    a = area or (BBOX['lat_min'], BBOX['lat_max'], BBOX['lon_min'], BBOX['lon_max'])
+    return a[0] <= ll[0] <= a[1] and a[2] <= ll[1] <= a[3]
 
 
 class _Frozen(BaseModel):
@@ -88,6 +90,11 @@ class Params(_Frozen):
     LP_EPS: float = 1e-3
     TIME_LIMIT: float = 600
     GAP: float = 0.01
+    # 종목 (runway/events.py 프리셋이 아래 값들을 함께 정한다 — 기본값은 풀코스)
+    EVENT: Literal['full', 'half', '10k'] = 'full'
+    AREA: tuple[float, float, float, float] = (BBOX['lat_min'], BBOX['lat_max'], BBOX['lon_min'], BBOX['lon_max'])
+    OSM: tuple[str, ...] = ('osm_roads.json',)
+    KEEP_POINTS: tuple[LatLon, ...] = ((37.5716, 126.9768), (37.5207, 127.1214))   # 도로망 축약 때 남겨 둘 교차로(종목 출발·도착)
     DAYTYPE: Literal['weekend', 'sunday', 'all'] = Field(
         'sunday', description="수요 기준일: 'sunday'(대회일=일요일 평균, 기본) | 'weekend'(토·일, 노트북 v1) | 'all'(전체 일평균)")
 
@@ -105,7 +112,7 @@ class Params(_Frozen):
 
 
 # 도로 그래프에 영향을 주는 값 — 바뀌면 네트워크를 다시 만든다(드묾)
-NETWORK_FIELDS = ('DAYTYPE', 'JUNCTION_R', 'NEAR_R', 'RETURN_R', 'REVISIT_R')
+NETWORK_FIELDS = ('DAYTYPE', 'JUNCTION_R', 'NEAR_R', 'RETURN_R', 'REVISIT_R', 'AREA', 'OSM', 'KEEP_POINTS')
 # 피해 행렬 RID에 영향을 주는 값
 SCHEDULE_FIELDS = ('T0', 'V_LEAD', 'V_SWEEP', 'PRE', 'POST', 'STAGE', 'LMAX', 'STEP')
 

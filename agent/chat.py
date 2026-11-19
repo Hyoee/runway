@@ -7,6 +7,7 @@ import re
 import anthropic
 
 from runway.engine import describe_params
+from runway.events import event_of
 
 from .tools import Session, make_tools
 
@@ -20,6 +21,13 @@ SYSTEM = """당신은 'RunWay' — 서울 도심 마라톤 코스를 설계하�
 - 당신은 사용자의 말을 도구의 조건 값으로 옮기고, 도구가 돌려준 숫자를 그대로 인용해 설명합니다.
 - 도구 결과에 없는 숫자는 쓰지 마세요. 추정·반올림한 새 숫자를 만들지 말고, 필요하면 도구를 다시 부르세요.
 - 장소 좌표를 지어내지 마세요. 장소는 search_place 또는 optimize_course의 장소 이름으로만 정합니다.
+
+## 종목 (풀코스 / 하프 / 10K)
+- "하프로", "하프 마라톤" → optimize_course(event='half'), "10킬로", "10K 코스", "10키로" → event='10k', "풀코스로" → event='full'.
+- 종목을 바꾸면 그 종목의 기본 조건(출발·도착·출발 시각)에서 시작합니다. 풀코스·하프는 광화문→올림픽공원, 10K는 상암 월드컵공원→여의도공원.
+- 도구 결과에 '비교' 항목(AS-IS 데이터 없음)이 있으면 기존 코스와 비교하는 표현("기존보다 ○% 감소", "AS-IS 대비")을 절대 쓰지 마세요. TO-BE 숫자만 설명합니다.
+- AS-IS 대비 숫자는 도구 결과에 AS_IS대비_변화율_퍼센트가 있을 때만 인용합니다.
+- 롯데월드타워 등 랜드마크 조망 조건은 어떤 종목에도 없습니다. 랜드마크 이야기를 하지 마세요.
 
 ## 도구 사용
 - 조건을 바꾸는 요청(출발지·도착지·출발 시각·금지 구간·코스 단순성)은 optimize_course 한 번에 바뀌는 값만 넣어 부릅니다.
@@ -38,7 +46,7 @@ SYSTEM = """당신은 'RunWay' — 서울 도심 마라톤 코스를 설계하�
 - 회귀 금지: 반환 왕복, 같은 도로 반대 차로, 1km 안에서 반대 방향으로 나란히 되돌아오기를 쓰지 않음
 - 재방문 금지: 코스상 2km 넘게 떨어진 두 지점이 300m 안에 다시 오지 않음 (고리 없음)
 - 공인 거리 42.195~42.6km, 같은 교차로 1회, 금지 구간(건국대병원 앞) 회피, 버스 정류장 데이터가 있는 영역 안의 도로만
-- AS-IS(2026 JTBC 공식 코스, 07:30 출발)는 고정 자료이며, 비우당교·학여울·둔촌사거리 반환 구간이 있어 이 규칙을 어깁니다 → get_asis_problems
+- AS-IS는 고정 자료: 풀코스 = 2026 JTBC 공식 코스(비우당교·학여울·둔촌사거리 반환), 10K = 2026 공식 10K 코스(상암→여의도). 하프는 AS-IS가 없습니다 → get_asis_problems
 
 ## 데이터와 한계 (질문받으면 정직하게)
 - 수요: 서울시 버스 노선×정류장 일별 승하차 원자료(2026-10)에서 사용일자로 판별한 일요일 4일 평균(대회가 일요일이므로). 휴일(10/5·10/9)은 데이터로 판별해 제외. 시간대 분포는 정류장별 월 시간대 비중.
@@ -71,7 +79,9 @@ def unverified_numbers(answer: str, s: Session, user_texts: list[str]) -> list[s
 
 def run_turn(client: anthropic.Anthropic, s: Session, history: list[dict], user_text: str, on_event=lambda kind, data: None) -> str:
     """history: [{'role','content'(str)}] — 텍스트만 보관한다. 현재 조건·KPI는 매 턴 상태 블록으로 다시 넣는다."""
-    state = f'[현재 화면 상태] 조건: {describe_params(s.params) if s.result else "아직 계산된 코스 없음"}'
+    state = f'[현재 화면 상태] 종목: {event_of(s.params).label} | 조건: {describe_params(s.params) if s.result else "아직 계산된 코스 없음"}'
+    if not event_of(s.params).has_asis:
+        state += ' | 이 종목은 AS-IS 비교 없음'
     if s.result:
         k = s.result['kpi']
         state += (f" | TO-BE 못 타는 승객 {k['riders']}명, 통제 정류장 {k['stops']}곳, "

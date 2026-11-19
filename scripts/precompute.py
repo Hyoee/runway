@@ -18,6 +18,8 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding='utf-8')
 
 from runway import DEFAULT, Engine, ScenarioError  # noqa: E402
+from runway.events import params_for  # noqa: E402
+from runway.params import NETWORK_FIELDS  # noqa: E402
 
 
 PASSENGER_FIRST = DEFAULT.with_(TURN=tuple(t * 0.5 for t in DEFAULT.TURN))
@@ -29,6 +31,8 @@ SCENARIOS = {                                   # 이름: 조건 (앱 사이드�
     '출발 09:00': DEFAULT.with_(T0=9.0),
     '꺾임 덜 중시(벌점 ×0.5)': PASSENGER_FIRST,
     '단순성 우선(벌점 ×2)': DEFAULT.with_(TURN=tuple(t * 2 for t in DEFAULT.TURN)),
+    '하프 기본': params_for('half'),
+    '10K 기본': params_for('10k'),
 }
 
 
@@ -43,6 +47,8 @@ def known_orders():
 def seed_all(eng):
     orders = known_orders()
     for name, p in SCENARIOS.items():
+        if p.key(*NETWORK_FIELDS[1:]) != DEFAULT.key(*NETWORK_FIELDS[1:]):   # 알려진 코스는 풀코스 도로망의 arc — 다른 도로망에는 넣지 않음
+            continue
         best = None
         for o in orders:
             try:

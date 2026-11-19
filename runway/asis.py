@@ -34,8 +34,22 @@ ASIS_WP = [   # (이름, 좌표, 공식 약도의 km 표지 — 없으면 None).
 ]
 
 
-def load_frozen(data_dir) -> dict | None:
-    f = Path(data_dir) / FROZEN
+# 10K AS-IS — 2026 JTBC 서울마라톤 대회 책자 p34 '10K 코스 안내' (2026년 공개 코스 기준)
+#   상암월드컵공원 앞 → 합정역 → 양화대교 남단 → 여의2교 → 여의하류IC → KBS 앞 교차로 → 마포대교 남단 → 여의도공원
+#   좌표: 정류소 위치 데이터(월드컵공원·합정역·KBS·여의도환승센터), 다리·IC는 OSM 도로 이름에서
+#   (양화대교 남단 = 양화로·노들로·선유로 교차로, 여의2교 = 여의2교지하차도, 여의하류IC = 여의서로 북단, 마포대교 남단 = 여의대로 교량 남단)
+FROZEN_10K = 'asis_10k_2026_official.json'
+ASIS_10K_WP = [
+    ('상암 월드컵공원(출발)', (37.566668, 126.896326), 0.0), ('합정역', (37.549460, 126.913879), None),
+    ('양화대교 남단', (37.535950, 126.897810), None), ('여의2교', (37.525700, 126.911000), None),
+    ('여의하류IC', (37.533000, 126.913000), None), ('KBS 앞 교차로', (37.524654, 126.918113), None),
+    ('마포대교 남단', (37.529640, 126.929908), None), ('여의도공원(도착)', (37.525767, 126.924223), 10.0),
+]
+ASIS_BY_FILE = {FROZEN: ASIS_WP, FROZEN_10K: ASIS_10K_WP}
+
+
+def load_frozen(data_dir, fname: str = FROZEN) -> dict | None:
+    f = Path(data_dir) / fname
     return json.load(open(f, encoding='utf-8')) if f.exists() else None
 
 
@@ -45,11 +59,11 @@ def network_signature(net) -> str:
     return hashlib.sha1(json.dumps([(int(a[1]), int(a[2])) for a in net.arcs]).encode()).hexdigest()[:16]
 
 
-def frozen_asis(sc: Scenario, data_dir):
+def frozen_asis(sc: Scenario, data_dir, fname: str = FROZEN):
     """고정된 공식 AS-IS (arc 순서, km 표지 대조). 파일이 없거나 도로 그래프가 달라졌으면 오류 — 조용히 다시 만들지 않는다."""
-    fz = load_frozen(data_dir)
+    fz = load_frozen(data_dir, fname)
     if fz is None:
-        raise FileNotFoundError(f'{FROZEN}가 없습니다. scripts/freeze_asis.py로 공식 AS-IS를 고정하세요.')
+        raise FileNotFoundError(f'{fname}가 없습니다. scripts/freeze_asis.py로 공식 AS-IS를 고정하세요.')
     if fz['network_signature'] != network_signature(sc.net):
         raise RuntimeError('도로 그래프가 고정 AS-IS를 만들 때와 다릅니다. AS-IS를 바꾸지 않으려면 그래프 설정을 되돌리세요.')
     return fz['order'], fz['km_check']
