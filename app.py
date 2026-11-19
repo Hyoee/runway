@@ -26,8 +26,20 @@ st.set_page_config(page_title='RunWay — 마라톤 코스 최적화', page_icon
 
 
 # ───────────────────────── 공용 자원 ─────────────────────────
+def code_version() -> str:
+    """엔진·에이전트 소스의 해시 — 새 코드가 배포되면 값이 바뀐다"""
+    import hashlib
+    h = hashlib.sha1()
+    for f in sorted([*(ROOT / 'runway').glob('*.py'), *(ROOT / 'agent').glob('*.py')]):
+        h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
+VERSION = code_version()
+
+
 @st.cache_resource(show_spinner='도로망·버스 데이터 불러오는 중 (첫 실행 약 20초)…')
-def get_engine() -> Engine:
+def get_engine(version: str) -> Engine:             # version이 바뀌면(새 배포) 엔진을 새로 만든다
     eng = Engine(ROOT)
     if eng.cached(DEFAULT) is None:                 # 기본 시나리오 캐시가 없으면 노트북 결과로 채운다 (시작 시 긴 풀이 방지)
         import json
@@ -50,7 +62,13 @@ def get_client(key: str):
     return anthropic.Anthropic(api_key=key)
 
 
-eng = get_engine()
+eng = get_engine(VERSION)
+# 새 코드가 배포되면, 열려 있던 브라우저 탭의 옛 세션(옛 클래스의 객체)을 버리고 새로 시작한다
+#  (옛 객체에는 새 필드가 없어 AttributeError가 났던 문제)
+if st.session_state.get('version') != VERSION:
+    for k in ('sess', 'history', 'chat'):
+        st.session_state.pop(k, None)
+    st.session_state['version'] = VERSION
 if 'sess' not in st.session_state:
     s = Session(engine=eng)
     s.result = eng.solve(DEFAULT)                   # 기본 시나리오는 사전 계산되어 즉시
