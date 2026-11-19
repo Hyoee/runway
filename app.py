@@ -168,15 +168,43 @@ with left:
     st.caption('변화는 AS-IS(2026 JTBC 코스) 대비')
 
     # 지도
+    NET = eng.net                                    # 도로 그래프(arc 구성은 수요 기준과 무관하게 같음)
+
+    def _offset(c, d=0.00035):
+        """반환(되돌아오는) 구간을 진행 방향 오른쪽으로 약 30m 띄워, 갈 때 선과 겹치지 않게"""
+        import math
+        k = math.cos(math.radians(37.55)); out = []
+        for i, (lo, la) in enumerate(c):
+            (lo0, la0), (lo1, la1) = c[max(i - 1, 0)], c[min(i + 1, len(c) - 1)]
+            dx, dy = (lo1 - lo0) * k, la1 - la0; n = math.hypot(dx, dy) or 1.0
+            out.append([lo + dy / n * d / k, la - dx / n * d])
+        return out
+
     def path_rows(res, name, color):
-        coords = res['geojson']['geometry']['coordinates']
+        """코스를 '처음 달리는 구간'과 '이미 달린 도로로 되돌아오는(반환) 구간'으로 나눠 그린다"""
         rgb = [int(color[i:i + 2], 16) for i in (1, 3, 5)]
-        return dict(name=name, path=coords, color=rgb, info=f"{name}: {res['kpi']['length_km']}km, 못 타는 승객 {res['kpi']['riders']:,}명")
+        info = f"{name}: {res['kpi']['length_km']}km, 못 타는 승객 {res['kpi']['riders']:,}명"
+        rows, seen, cur = [], set(), None
+        for a in res['order']:
+            sid = int(NET.SEG[a]); ret = sid in seen; seen.add(sid)
+            c = [[NET.allnodes[n][1], NET.allnodes[n][0]] for n in NET.path_of(a)]
+            if ret:
+                c = _offset(c)
+            if cur is not None and cur['ret'] == ret:
+                cur['path'] += c[1:]
+            else:
+                cur = dict(ret=ret, path=c, name=name, color=rgb + ([170] if ret else [255]),
+                           info=info + (' · 반환(왔던 길로 되돌아옴)' if ret else '')); rows.append(cur)
+        return rows
     show = st.radio('지도에 표시', ['둘 다', 'TO-BE만', 'AS-IS만'], horizontal=True, label_visibility='collapsed')
-    paths = ([path_rows(A, 'AS-IS', C_ASIS)] if show != 'TO-BE만' else []) + ([path_rows(R, 'TO-BE', C_TOBE)] if show != 'AS-IS만' else [])
+    paths = (path_rows(A, 'AS-IS', C_ASIS) if show != 'TO-BE만' else []) + (path_rows(R, 'TO-BE', C_TOBE) if show != 'AS-IS만' else [])
     pts = [dict(name=f'출발 · {S.params.START_NAME}', pos=[S.params.START[1], S.params.START[0]], color=[11, 11, 11]),
            dict(name=f'도착 · {S.params.FINISH_NAME}', pos=[S.params.FINISH[1], S.params.FINISH[0]], color=[11, 11, 11])]
     pts += [dict(name=f'★ {lm.name}', pos=[lm.coord[1], lm.coord[0]], color=[82, 81, 78]) for lm in S.params.IDENTITY]
+    if show != 'TO-BE만':                             # AS-IS 공식 반환 지점 (대회 책자 p28~29)
+        from runway.asis import load_frozen
+        pts += [dict(name=f"↩ {w['name'].replace('(반환)', '')} 반환", pos=[w['coord'][1], w['coord'][0]], color=[235, 104, 52])
+                for w in (load_frozen(eng.data_dir) or {}).get('waypoints', []) if '반환' in w['name'] and '대림상가' not in w['name']]
     zones = [dict(name=f'금지 · {z.name}', pos=[z.coord[1], z.coord[0]], r=z.r) for z in S.params.FORBID]
     layers = [
         pdk.Layer('PathLayer', paths, get_path='path', get_color=[255, 255, 255], width_min_pixels=7),     # 흰 테두리 (겹침 구분)
@@ -192,8 +220,9 @@ with left:
     st.pydeck_chart(pdk.Deck(layers=layers, map_provider='carto', map_style='light',
                              initial_view_state=pdk.ViewState(latitude=37.535, longitude=127.05, zoom=11.2),
                              tooltip={'text': '{info}{name}'}), height=520)
-    st.markdown(f"<span style='color:{C_ASIS}'>━━</span> AS-IS (2026 JTBC 공식 경유지)&nbsp;&nbsp;&nbsp;"
-                f"<span style='color:{C_TOBE}'>━━</span> TO-BE (RunWay 최적 코스)", unsafe_allow_html=True)
+    st.markdown(f"<span style='color:{C_ASIS}'>━━</span> AS-IS (2026 JTBC 공식 코스)&nbsp;&nbsp;&nbsp;"
+                f"<span style='color:{C_TOBE}'>━━</span> TO-BE (RunWay 최적 코스)&nbsp;&nbsp;&nbsp;"
+                f"<span style='color:{C_ASIS};opacity:.6'>━━</span> AS-IS 반환 구간(왔던 길로 되돌아옴, 옆으로 띄워 표시)", unsafe_allow_html=True)
 
     t1, t2, t3, t4 = st.tabs(['KPI 비교', '코스 도로별', '영향 버스 노선', 'AS-IS 문제점'])
     with t1:
