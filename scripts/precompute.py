@@ -22,6 +22,8 @@ def lotte(L):
     return (DEFAULT.IDENTITY[0].model_copy(update={'L': L}),)
 
 
+PASSENGER_FIRST = DEFAULT.with_(TURN=tuple(t * 0.5 for t in DEFAULT.TURN))
+
 SCENARIOS = {                                   # 이름: 조건 (데모·파레토·일정 질문에 바로 답하기 위한 것)
     '기본(08:00, 조망≥2km)': DEFAULT,
     '조망 하한 0km': DEFAULT.with_(IDENTITY=lotte(0.0)),
@@ -29,6 +31,7 @@ SCENARIOS = {                                   # 이름: 조건 (데모·파레
     '조망 하한 3km': DEFAULT.with_(IDENTITY=lotte(3000.0)),
     '출발 07:00': DEFAULT.with_(T0=7.0),
     '출발 09:00': DEFAULT.with_(T0=9.0),
+    '승객 우선(꺾임 벌점 ×0.5)': PASSENGER_FIRST,
 }
 
 
@@ -48,12 +51,13 @@ def main():
         return
 
     r = json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))
-    res = eng.seed(DEFAULT, r['tobe']['order'], r['solver'])
-    print('seed 기본 시나리오:', res['kpi']['riders'], '명,', res['kpi']['routes'], '노선, 목적함수', res['solver'].get('목적함수'))
+    for nm, p in (('기본', DEFAULT), ('승객 우선', PASSENGER_FIRST)):    # 노트북 해를 후보로 등록 (더 좋은 해가 있으면 무시됨)
+        res = eng.seed(p, r['tobe']['order'], r['solver'])
+        print(f'seed {nm}: 피해', res['kpi']['riders'], '명,', res['kpi']['routes'], '노선, 목적함수', res['objective'])
     if a.seed:
         return
     for name, p in SCENARIOS.items():
-        if a.only and name not in a.only:
+        if a.only and not any(o in name for o in a.only):          # 이름 일부만 맞아도 선택
             continue
         t0 = time.time()
         out = eng.solve(p, time_limit=a.time_limit, gap=a.gap, use_cache=False, progress=lambda m: print('   ', m, flush=True))

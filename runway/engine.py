@@ -44,7 +44,8 @@ def describe_params(p: Params) -> str:
         out += [f'금지: {z.name}(반경 {z.r:g}m)' for z in p.FORBID if z not in d.FORBID]
         out += [f'금지 해제: {z.name}' for z in d.FORBID if z not in p.FORBID]
     if p.TURN != d.TURN:
-        out.append(f'방향 전환 벌점 ×{p.TURN[0] / d.TURN[0]:g}')
+        r = p.TURN[0] / d.TURN[0]
+        out.append(f"{'승객 우선' if r < 1 else '단순성 우선'} (꺾임 벌점 ×{r:g})")
     if p.ALPHA != d.ALPHA:
         out.append(f'노선 가중치 {p.ALPHA:g}')
     return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 08:00, 롯데타워 조망≥2km)'
