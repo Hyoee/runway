@@ -1,0 +1,8 @@
+pulp>=2.8
+highspy  # 선택: 설치하면 PuLP가 더 빠른 HiGHS 솔버를 자동 사용
+numpy
+pandas
+networkx
+scipy
+matplotlib
+openpyxl
