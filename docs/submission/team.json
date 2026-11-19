@@ -1,0 +1,15 @@
+{
+  "team": "[팀명]",
+  "project": "RunWay",
+  "leader": "[대표자 이름]",
+  "members": ["[팀원 이름]"],
+  "date": "2026. 11. __.",
+  "roles": [
+    {"name": "[대표자 이름]", "role": "대표자", "work": "[담당 업무]"},
+    {"name": "[팀원 이름]", "role": "[역할]", "work": "[담당 업무]"}
+  ],
+  "pre_dev": "[작성] 해커톤 이전 개발 범위 (없으면 '해당 없음')",
+  "during_dev": "MILP 코스 최적화 엔진(runway 패키지)·버스 원자료 반영(일요일 수요·실측 노선)·공식 AS-IS 고정·회귀/재방문 금지 제약·Streamlit 앱·Claude 에이전트·배포",
+  "other_contest": "[작성] 타 공모전 출품·수상 여부 (없으면 '해당 없음')",
+  "app_url": "https://runway-zxsjofc7pbgfytrlfa25up.streamlit.app"
+}
