@@ -322,7 +322,9 @@ def load_network(data_dir: Path, p: Params = DEFAULT, cache_dir: Path | None = N
     cache_dir = Path(cache_dir or data_dir.parent / 'cache')
     stamp = '-'.join(str(int(f.stat().st_mtime)) + str(f.stat().st_size) for f in sorted(data_dir.iterdir()) if f.is_file())
     import hashlib
-    key = hashlib.sha1(f'{CACHE_VERSION}|{p.key(*NETWORK_FIELDS)}|{stamp}'.encode()).hexdigest()[:16]
+    import sys
+    env = f'py{sys.version_info[0]}.{sys.version_info[1]}-np{np.__version__}-nx{nx.__version__}'   # pickle 호환성
+    key = hashlib.sha1(f'{CACHE_VERSION}|{p.key(*NETWORK_FIELDS)}|{stamp}|{env}'.encode()).hexdigest()[:16]
     f = cache_dir / f'network_{key}.pkl'
     if f.exists():
         with open(f, 'rb') as fh:
