@@ -16,7 +16,7 @@ from pathlib import Path
 from .asis import build_asis
 from .evaluate import evaluate, kpis, objective, road_table, to_geojson_feature, validate_course
 from .network import load_network
-from .params import DEFAULT, Params
+from .params import DEFAULT, MODEL_VERSION, NETWORK_FIELDS, Params
 from .places import search_places
 from .scenario import Scenario, ScenarioError
 from .solve import optimize
@@ -26,7 +26,7 @@ _NON_PROBLEM = {'TIME_LIMIT', 'GAP', 'START_NAME', 'FINISH_NAME'}
 
 
 def problem_key(p: Params) -> str:
-    return p.key(*[f for f in Params.model_fields if f not in _NON_PROBLEM])
+    return MODEL_VERSION + '-' + p.key(*[f for f in Params.model_fields if f not in _NON_PROBLEM])
 
 
 def describe_params(p: Params) -> str:
@@ -50,7 +50,9 @@ def describe_params(p: Params) -> str:
         out.append(f'노선당 고정 벌점 {p.ALPHA:g}')
     if p.DETOUR_W != d.DETOUR_W:
         out.append('우회 영향 미반영 (못 타는 승객만)' if p.DETOUR_W == 0 else f'우회 가중치 δ={p.DETOUR_W:g}')
-    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 08:00, 롯데타워 조망≥2km)'
+    if p.DAYTYPE != d.DAYTYPE:
+        out.append({'weekend': '수요: 토·일 평균', 'all': '수요: 전체 일평균', 'sunday': '수요: 일요일 평균'}[p.DAYTYPE])
+    return ', '.join(out) or '기본 조건 (광화문→올림픽공원, 일요일 08:00, 롯데타워 조망≥2km)'
 
 
 class Engine:
@@ -59,9 +61,17 @@ class Engine:
         self.data_dir = self.root / 'data'
         self.store = self.root / 'scenarios'
         self.store.mkdir(exist_ok=True)
-        self.net = load_network(self.data_dir)
+        self._nets: dict = {}
+        self.net = self.network(DEFAULT)
         self._sc: OrderedDict[str, Scenario] = OrderedDict()
         self._lock = threading.Lock()
+
+    def network(self, p: Params):
+        """수요 기준(DAYTYPE 등)별 도로망 — 필요할 때 한 번 만든다"""
+        k = p.key(*NETWORK_FIELDS)
+        if k not in self._nets:
+            self._nets[k] = load_network(self.data_dir, p)
+        return self._nets[k]
 
     # ── 조건 → Scenario (최근 8개 메모리 캐시) ──
     def scenario(self, p: Params) -> Scenario:
@@ -70,7 +80,7 @@ class Engine:
             if k in self._sc:
                 self._sc.move_to_end(k)
                 return self._sc[k]
-        sc = Scenario(self.net, p)                   # ScenarioError는 호출자에게 그대로
+        sc = Scenario(self.network(p), p)            # ScenarioError는 호출자에게 그대로
         with self._lock:
             self._sc[k] = sc
             while len(self._sc) > 8:

@@ -25,6 +25,8 @@ class ScenarioError(ValueError):
 class Scenario:
     def __init__(self, net: Network, p: Params):
         self.net, self.p = net, p
+        if getattr(net, 'daytype', p.DAYTYPE) != p.DAYTYPE:
+            raise ValueError(f'네트워크 수요 기준({net.daytype})과 조건(DAYTYPE={p.DAYTYPE})이 다릅니다 — load_network(data, p)로 만드세요')
         for nm, ll in (('출발지', p.START), ('도착지', p.FINISH)):
             if not in_bbox(ll):
                 raise ScenarioError(f'{nm} {ll}가 분석 영역(서울 도심~송파, 위도 37.47~37.60, 경도 126.955~127.15) 밖입니다.')

@@ -12,6 +12,7 @@ import pytest
 
 from runway import Scenario, ScenarioError, build_asis, evaluate, kpis, load_network, optimize, solve_milp, validate_course
 from runway.params import NOTEBOOK as DEFAULT          # 노트북(v1) 목적식으로 회귀 비교
+from runway.params import DEFAULT as V3                # 서비스 기본값 (일요일 수요 + 실측 노선 우회)
 from runway.evaluate import objective
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,7 +21,12 @@ RESULT = json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))
 
 @pytest.fixture(scope='session')
 def net():
-    return load_network(ROOT / 'data')
+    return load_network(ROOT / 'data', DEFAULT)
+
+
+@pytest.fixture(scope='session')
+def net_v3():
+    return load_network(ROOT / 'data', V3)
 
 
 @pytest.fixture(scope='session')
@@ -69,12 +75,11 @@ def test_objective_recomputation_matches_solver(sc):   # 고정 코스 목적함
     assert round(objective(sc, RESULT['tobe']['order'])) == pytest.approx(38336, abs=2)
 
 
-@pytest.mark.parametrize('version', ['v1', 'v2'])
-def test_milp_objective_equals_recomputation(net, version):
+@pytest.mark.parametrize('version', ['v1', 'v3'])
+def test_milp_objective_equals_recomputation(net, net_v3, version):
     """경로가 하나뿐인 회랑(저장된 코스의 arc만)에서 MILP를 풀면, 솔버 목적함수 = objective() 재계산이어야 한다.
-    → 모델 수식과 재계산 함수가 같은 식임을 v1(노트북)·v2(우회 승객) 모두에서 확인"""
-    from runway.params import DEFAULT as V2
-    sc_ = Scenario(net, DEFAULT if version == 'v1' else V2)
+    → 모델 수식과 재계산 함수가 같은 식임을 v1(노트북)·v3(일요일 수요 + 실측 노선 우회 승객) 모두에서 확인"""
+    sc_ = Scenario(net, DEFAULT) if version == 'v1' else Scenario(net_v3, V3)
     order = RESULT['tobe']['order']
     corridor = sorted(set(order) | {int(net.REV[a]) for a in order})   # 반대 방향 포함(쌍 벌점 판정용) — 경로는 여전히 하나
     out, info = solve_milp(sc_, corridor, time_limit=60)
@@ -82,16 +87,25 @@ def test_milp_objective_equals_recomputation(net, version):
     assert info['목적함수'] == pytest.approx(objective(sc_, order), abs=2)
 
 
-def test_route_volumes_sane(net):
-    """노선별 이용객 합 = 주간 노선이 있는 정류장들의 승차 합 (균등 배분이 승객을 만들거나 잃지 않음)"""
+def test_route_volumes_from_raw(net_v3):
+    """노선별 이용객(실측, 일요일) — 합이 정류장 단위 일요일 06~14시 승차와 맞고, 야간버스는 빠진다"""
     import numpy as np
     from runway.network import load_data
-    agg = load_data(ROOT / 'data', 'weekend')[0]
-    day = agg['routes'].astype(str).map(lambda s: any(not r.startswith('N') for r in s.split('|')))
-    tot = (agg.loc[day, [f'h{h}' for h in range(6, 15)]].to_numpy(float) * agg.loc[day, 'f'].to_numpy(float)[:, None]).sum()
-    assert sum(v.sum() for v in net.route_vol.values()) == pytest.approx(tot, rel=1e-9)
-    assert not any(r.startswith('N') for r in net.route_vol)
-    assert all(np.all(v >= 0) for v in net.route_vol.values())
+    assert net_v3.route_source.startswith('실측') and net_v3.daytype == 'sunday'
+    agg = load_data(ROOT / 'data', 'sunday')[0].dropna(subset=['T'])
+    stop_tot = (agg[[f'h{h}' for h in range(6, 15)]].to_numpy(float) * agg['f'].to_numpy(float)[:, None]).sum()
+    route_tot = sum(v.sum() for v in net_v3.route_vol.values())
+    assert 0.9 * stop_tot < route_tot <= stop_tot * 1.0001       # 차이 = 야간버스 승차(주간 시간대 비중으로는 0이 아님)
+    assert not any(r.startswith('N') for r in net_v3.route_vol)
+    assert all(np.all(v >= 0) for v in net_v3.route_vol.values())
+
+
+def test_daytype_calendar():
+    """사용일자 판별: 10/5(개천절 대체공휴일)·10/9(한글날)만 휴일, 일요일 4일, 10/27 원자료 없음"""
+    import pandas as pd
+    cal = pd.read_csv(ROOT / 'data' / 'daytype_calendar_202610.csv', encoding='utf-8-sig')
+    assert sorted(cal.loc[cal['유형'] == 'holiday', 'date']) == ['2026-10-05', '2026-10-09']
+    assert (cal['유형'] == 'sunday').sum() == 4 and '2026-10-27' not in set(cal['date'])
 
 
 def test_lp_relaxation_bound(sc):                # Step 7 ① LP 완화 하한 24,239 — 모델 수식이 같은지

@@ -85,7 +85,8 @@ class Params(_Frozen):
     LP_EPS: float = 1e-3
     TIME_LIMIT: float = 600
     GAP: float = 0.01
-    DAYTYPE: Literal['weekend', 'sunday', 'all'] = 'weekend'
+    DAYTYPE: Literal['weekend', 'sunday', 'all'] = Field(
+        'sunday', description="수요 기준일: 'sunday'(대회일=일요일 평균, 기본) | 'weekend'(토·일, 노트북 v1) | 'all'(전체 일평균)")
 
     # ── 도우미 ──
     def with_(self, **kw) -> 'Params':
@@ -107,4 +108,5 @@ SCHEDULE_FIELDS = ('T0', 'V_LEAD', 'V_SWEEP', 'PRE', 'POST', 'STAGE', 'LMAX', 'S
 
 DEFAULT = Params()
 # 노트북(v1)의 목적식: 노선 1개 = 60점, 우회 승객 미반영 — 회귀 테스트와 비교용
-NOTEBOOK = Params(ALPHA=60.0, DETOUR_W=0.0)
+NOTEBOOK = Params(ALPHA=60.0, DETOUR_W=0.0, DAYTYPE='weekend')
+MODEL_VERSION = 'v3'    # 목적식·데이터가 바뀌면 올린다 → 저장된 결과 캐시 키가 달라져 섞이지 않음

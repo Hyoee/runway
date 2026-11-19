@@ -10,7 +10,7 @@ from .scenario import Scenario
 
 KPI_LABELS = [  # (표시 이름, 키, 낮을수록 좋은가)
     ('코스 길이 (km)', 'length_km', None),
-    ('통제 시간대 승객 피해 (명/주말 하루)', 'riders', True),
+    ('못 타는 승객, 통제 시간 중 (명/대회일)', 'riders', True),
     ('시민 영향 = 못 타는 승객 + δ×우회 이용객 (명)', 'citizen_impact', True),
     ('영향 받는 버스 노선 (개)', 'routes', True),
     ('우회 노선 이용객, 통제 시간 중 (명, 추정)', 'detour_riders', True),

@@ -23,7 +23,12 @@ HOURS = list(range(6, 15))
 EXCLUDE = ['강변북로', '올림픽대로', '동부간선', '내부순환', '북부간선', '서부간선', '분당수서', '강남순환', '고가', '터널']
 KEEP = {'trunk', 'primary', 'secondary'}
 KX, KY = 88200.0, 111000.0
-CACHE_VERSION = 2
+CACHE_VERSION = 3
+ROUTE_FILE = 'route_stop_daytype_202610.csv'          # scripts/build_route_data.py가 원자료에서 만든 노선×정류장 일평균
+# 날의 유형 → 노선 파일의 유형별 하루 평균을 섞는 가중치 (2026-10: 평일 19, 토 5, 일 4, 휴일 2일 — 10/27 원자료 없음)
+DAY_MIX = {'sunday': {'sunday': 1.0},
+           'weekend': {'saturday': 5 / 9, 'sunday': 4 / 9},
+           'all': {'weekday': 19 / 30, 'saturday': 5 / 30, 'sunday': 4 / 30, 'holiday': 2 / 30}}
 
 
 def is_day_route(r: str) -> bool:
@@ -31,19 +36,33 @@ def is_day_route(r: str) -> bool:
     return not str(r).startswith('N')
 
 
-def route_volumes(agg: pd.DataFrame) -> dict:
-    """노선별 시간대별 이용객 추정 — 서울 전체 정류장 승차를 그 정류장의 주간 노선 수로 나눠 노선마다 합산.
-    (원자료 OA-12913은 노선×정류장 단위지만 data/의 집계 파일은 정류장 단위라, 균등 배분으로 근사)"""
-    vols = agg[[f'h{h}' for h in HOURS]].to_numpy(float) * agg['f'].to_numpy(float)[:, None]
+def route_volumes(agg: pd.DataFrame, data_dir: Path, daytype: str) -> tuple[dict, str]:
+    """노선별 시간대별 이용객 (06~14시, 대회일 유형 하루) → (dict, 출처).
+
+    실측: 노선×정류장 일평균 승차(사용일자로 판별한 유형별) × 그 정류장의 시간대 비중(월 시간대별 승차 / 월 합계)
+    파일이 없으면: 정류장 승차를 주간 노선 수로 균등 배분 (v2 근사)"""
+    f = Path(data_dir) / ROUTE_FILE
+    hcols = [f'h{h}' for h in HOURS]
     out: dict[str, np.ndarray] = {}
-    for rs, v in zip(agg['routes'].astype(str), vols):
-        day = [r for r in rs.split('|') if is_day_route(r)]
-        if not day:
-            continue
-        share = v / len(day)
+    if f.exists():
+        rs = pd.read_csv(f, dtype={'route': str, 'ars': str}, encoding='utf-8-sig')
+        rs['ars'] = rs['ars'].str.zfill(5)
+        rs = rs[rs['route'].map(is_day_route)]
+        rs['board'] = sum(w * rs[f'board_{t}'] for t, w in DAY_MIX[daytype].items())
+        ok = agg[agg['T'].fillna(0) > 0].set_index('ars')               # 월 합계 0인 정류장은 비중을 정의할 수 없음
+        shape = ok[hcols].div(ok['T'], axis=0)
+        shape = shape[~shape.index.duplicated()]
+        rs = rs[rs['ars'].isin(shape.index)]
+        v = rs['board'].to_numpy(float)[:, None] * shape.loc[rs['ars']].to_numpy(float)
+        for r, row in zip(rs['route'], v):
+            out[r] = out.get(r, 0) + row
+        return out, f'실측(노선×정류장, {daytype})'
+    vols = agg[hcols].to_numpy(float) * agg['f'].to_numpy(float)[:, None]
+    for rs_, v in zip(agg['routes'].astype(str), vols):
+        day = [r for r in rs_.split('|') if is_day_route(r)]
         for r in day:
-            out[r] = out.get(r, 0) + share
-    return out
+            out[r] = out.get(r, 0) + v / len(day)
+    return out, '추정(정류장 승차 균등 배분)'
 
 
 @dataclass
@@ -57,7 +76,7 @@ class Network:
     SEG: np.ndarray
     REV: np.ndarray
     Lm: np.ndarray
-    vol: np.ndarray            # (NA, len(HOURS)) arc 위 정류장 시간대별 승차(주말 하루)
+    vol: np.ndarray            # (NA, len(HOURS)) arc 위 정류장 시간대별 승차(대회일 유형 하루 — DAYTYPE)
     seg_routes: list           # arc별 노선 집합
     hw_w: np.ndarray           # 도로 등급 계수
     HOUT: np.ndarray
@@ -66,7 +85,9 @@ class Network:
     NEAR: dict
     base: list                 # 배경 지도용 OSM 도로 좌표열
     stats: dict = field(default_factory=dict)
-    route_vol: dict = field(default_factory=dict)   # 노선 → 시간대별(06~14시) 노선 전체 이용객 추정 (주말 하루)
+    route_vol: dict = field(default_factory=dict)   # 노선 → 시간대별(06~14시) 노선 전체 이용객 (대회일 유형 하루)
+    daytype: str = 'weekend'                        # 이 네트워크의 수요 기준 (Params.DAYTYPE과 같아야 함)
+    route_source: str = ''
 
     @property
     def NA(self) -> int:
@@ -110,7 +131,8 @@ def load_data(data_dir: Path, daytype: str):
     dt['f_all'] = 1 / 31
     city = {k: float((dt['sat_sum'].sum() * (k != 'sunday') + dt['sun_sum'].sum()) / (9 if k == 'weekend' else 4) / T.sum())
             for k in ('weekend', 'sunday')}
-    agg = agg.merge(dt[['ars', 'f_weekend', 'f_sunday', 'f_all']], on='ars', how='left')
+    dt['T'] = T                                         # 정류장 월 승차 합(31일 환산) — 시간대 비중의 분모
+    agg = agg.merge(dt[['ars', 'f_weekend', 'f_sunday', 'f_all', 'T']], on='ars', how='left')
     agg['f'] = agg['f_' + daytype].fillna(city.get(daytype, 1 / 31))
     return agg, xy, osm, tunnel
 
@@ -331,7 +353,8 @@ def build_network(data_dir: Path, p: Params = DEFAULT) -> Network:
     net = Network(allnodes=allnodes, segs=segs, nodes=nodes, arcs=arcs, U=U, V=V, SEG=SEG, REV=REV, Lm=Lm, vol=vol,
                   seg_routes=seg_routes, hw_w=hw_w, HOUT=np.zeros(NA), HIN=np.zeros(NA), TWINS={}, NEAR={}, base=base)
     net.HOUT, net.HIN, net.TWINS, net.NEAR = _shape_features(net, p.NEAR_R)
-    net.route_vol = route_volumes(agg)
+    net.route_vol, net.route_source = route_volumes(agg, data_dir, p.DAYTYPE)
+    net.daytype = p.DAYTYPE
     net.stats = dict(교차로=len(nodes), 구간=len(segs), 총km=round(sum(s['length'] for s in segs) / 1000),
                      대상정류장=n_area, 연결정류장=n_snap, arc=NA,
                      되돌아오기쌍=sum(len(d) - 1 for d in net.TWINS.values()) // 2, 재방문쌍=len(net.NEAR))
@@ -346,6 +369,7 @@ def load_network(data_dir: Path, p: Params = DEFAULT, cache_dir: Path | None = N
     import hashlib
     import sys
     env = f'py{sys.version_info[0]}.{sys.version_info[1]}-np{np.__version__}-nx{nx.__version__}'   # pickle 호환성
+    env += '-src' + hashlib.sha1(Path(__file__).read_bytes()).hexdigest()[:8]                    # 이 파일이 바뀌면 다시 만든다
     key = hashlib.sha1(f'{CACHE_VERSION}|{p.key(*NETWORK_FIELDS)}|{stamp}|{env}'.encode()).hexdigest()[:16]
     f = cache_dir / f'network_{key}.pkl'
     if f.exists():

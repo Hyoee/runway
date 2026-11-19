@@ -127,7 +127,7 @@ with left:
     k, a = R['kpi'], A['kpi']
     cols = st.columns(5)
     tiles = [('시민 영향 (명)', 'citizen_impact', '못 타는 승객 + δ×우회 노선 이용객 — 최적화가 줄이는 값'),
-             ('못 타는 승객', 'riders', '통제 시간 동안 코스 위 정류장에서 버스를 못 타는 승객 (주말 하루)'),
+             ('못 타는 승객', 'riders', '통제 시간 동안 코스 위 정류장에서 버스를 못 타는 승객 (일요일 하루 기준)'),
              ('우회 노선 이용객', 'detour_riders', '통제 시간 동안 우회하는 노선 전체의 이용객 추정'),
              ('영향 노선', 'routes', '코스 위에 정류장이 있는 노선 수 (크기 미반영)'),
              ('방향 전환 45°↑', 'turns', '러너가 외우기 쉬운 단순한 코스일수록 적음')]
@@ -182,7 +182,7 @@ with left:
                    + (' · 저장된 결과' if R.get('cached') else ''))
     with t2:
         st.dataframe(pd.DataFrame(R['roads']), hide_index=True, width='stretch')
-        st.caption('피해 = 해당 도로 통제 시간 동안 그 도로 정류장에서 버스를 타지 못하는 승객(주말 하루 기준)')
+        st.caption('피해 = 해당 도로 통제 시간 동안 그 도로 정류장에서 버스를 타지 못하는 승객(일요일 하루 기준)')
     with t3:
         st.caption('우회 시간 동안 그 노선 전체를 이용하는 승객 추정 — 노선 수보다 이 값이 실제 영향의 크기에 가깝습니다')
         c1, c2 = st.columns(2)

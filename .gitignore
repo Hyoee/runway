@@ -11,3 +11,6 @@ cbc.log
 # 비밀 정보 — API 키는 절대 커밋하지 않는다
 .env
 .streamlit/secrets.toml
+
+# 원자료(144MB, GitHub 100MB 제한 초과) — scripts/build_route_data.py로 요약 파일을 만들어 커밋한다
+data/BUS_STATION_BOARDING_MONTH_*.csv
