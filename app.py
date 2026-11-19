@@ -28,7 +28,12 @@ st.set_page_config(page_title='RunWay — 마라톤 코스 최적화', page_icon
 # ───────────────────────── 공용 자원 ─────────────────────────
 @st.cache_resource(show_spinner='도로망·버스 데이터 불러오는 중 (첫 실행 약 20초)…')
 def get_engine() -> Engine:
-    return Engine(ROOT)
+    eng = Engine(ROOT)
+    if eng.cached(DEFAULT) is None:                 # 기본 시나리오 캐시가 없으면 노트북 결과로 채운다 (시작 시 긴 풀이 방지)
+        import json
+        r = json.load(open(ROOT / 'out' / 'result.json', encoding='utf-8'))
+        eng.seed(DEFAULT, r['tobe']['order'], r['solver'])
+    return eng
 
 
 def api_key() -> str | None:
