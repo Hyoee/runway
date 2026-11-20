@@ -253,9 +253,32 @@ class Engine:
                                       extra=set(prev['order'] if prev else ()) | set(self.known_orders(p)))
         except ScenarioError as e:
             return dict(ok=False, reason=str(e))
-        if order is None:
+        res = None
+        if order is not None:
+            res = self.package(sc, order, 'TO-BE', info)
+            if res['violations']:
+                res = None
+        # 이미 찾은 코스가 새 조건에서도 규칙을 지키고 더 좋으면 그것을 쓴다 (허용 gap 안에서 솔버가 조금 나쁜 해에 멈추는 경우 방지
+        # — 예: 코스와 3km 떨어진 장소를 금지했는데 숫자가 달라지는 문제)
+        if (best := self.best_known(p, sc)) and (res is None or best['objective_exact'] < res['objective_exact']):
+            if progress:
+                progress(f"이미 찾은 코스({best['solver'].get('출처')})가 이 조건에서 더 좋아 그것을 사용")
+            res = best
+        if res is None:
             return dict(ok=False, reason=f"{info.get('해 종류', '해 없음')} (LP 상태 {info.get('LP상태')}, {time.time() - t0:.0f}초)", solver=info)
-        res = self.package(sc, order, 'TO-BE', info)
-        if res['violations']:
-            return dict(ok=False, reason=f'솔버 해가 제약 검사를 통과하지 못함: {res["violations"]}', solver=info)
         return dict(self._save_if_better(p, res), ok=True, cached=False)
+
+    def best_known(self, p: Params, sc=None) -> dict | None:
+        """같은 도로망·같은 거리로 저장된 코스를 조건 p로 다시 평가해, 규칙을 지키는 것 중 가장 좋은 것"""
+        k, best = p.key(*NETWORK_FIELDS[1:]), None
+        sc = sc or self.scenario(p)
+        for src in self.library():
+            if src['net_key'] != k or not (p.LMIN - 1 <= src['kpi']['length_km'] * 1000 <= p.LMAX + 1):
+                continue
+            try:
+                r = self.package(sc, src['order'], 'TO-BE', dict(solver='저장된 코스 재평가', 출처=src['조건']))
+            except (ScenarioError, IndexError, KeyError):
+                continue
+            if not r['violations'] and (best is None or r['objective_exact'] < best['objective_exact']):
+                best = r
+        return best
