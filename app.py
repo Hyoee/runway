@@ -84,7 +84,7 @@ def get_client(key: str):
 
 eng = get_engine(VERSION)
 if st.session_state.get('version') != VERSION:     # 새 코드 배포 → 옛 세션 버림
-    for k in ('sess', 'history', 'chat', 'ai_card', 'briefing', 'tradeoff', 'cf', 'cf_ai'):
+    for k in ('sess', 'history', 'chat', 'pending', 'fixing', 'briefing', 'tradeoff', 'cf', 'cf_ai'):
         st.session_state.pop(k, None)
     st.session_state['version'] = VERSION
 if 'sess' not in st.session_state:
@@ -231,45 +231,104 @@ with st.sidebar:
 
 
 # ───────────────────────── ① 목표 입력 ─────────────────────────
+def interpret(text: str):
+    """문장 → AI 조건 해석 → 엔진 조건 검증. 계산은 하지 않고 확인용 결과만 돌려준다"""
+    card, err = llm_call(llm.interpret_goal, text, describe_params(S.params))
+    if err:
+        return dict(text=text, error=err)
+    newp, perr = build_params(S, event=card.event, start_place=card.start_place, finish_place=card.finish_place,
+                              start_hour=card.start_hour, avoid_places=card.avoid_places)
+    return dict(text=text, card=card.model_dump(), params=newp, perr=perr)
+
+
+def condition_html(pend) -> str:
+    """AI가 읽은 조건을 확인용 HTML 표로 (읽기 전용)"""
+    c, q, e = pend['card'], pend['params'], pend['perr']
+    cur = S.params
+
+    def row(k, v, changed=False, bad=False):
+        bg = '#fdecea' if bad else ('#fdeee6' if changed else '#ffffff')
+        tag = (" <span style='font-size:11px;color:#c0392b'>확인 필요</span>" if bad else
+               (" <span style='font-size:11px;color:#d4542a'>변경</span>" if changed else ''))
+        return (f"<tr style='background:{bg}'><td style='padding:8px 12px;border-bottom:1px solid #e8e6e1;width:150px;color:#52514e'>{k}</td>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #e8e6e1'><b>{v}</b>{tag}</td></tr>")
+    base = q or cur
+    bad = (e or {}).get('항목', '')
+    ev = EVENTS[c['event'] or base.EVENT]
+    t0 = c['start_hour'] if c['start_hour'] is not None else base.T0
+    rows = [row('종목', f'{ev.label} ({ev.distance_m / 1000:g}km)', ev.key != cur.EVENT),
+            row('출발지', c['start_place'] if '출발지' in bad else base.START_NAME, bool(c['start_place']), '출발지' in bad),
+            row('도착지', c['finish_place'] if '도착지' in bad else base.FINISH_NAME, bool(c['finish_place']), '도착지' in bad),
+            row('출발 시각', f'일요일 {hm(t0)}', c['start_hour'] is not None),
+            row('피할 장소', ', '.join(c['avoid_places']) if c['avoid_places'] else
+                (', '.join(z.name for z in base.FORBID) or '없음'), bool(c['avoid_places']), '피할 장소' in bad),
+            row('항상 지키는 규칙', '공인 거리 · 회귀 금지 · 재방문 금지 · 같은 교차로 1회 · 금지 구간 회피')]
+    if c['unsupported']:
+        rows.append(row('반영할 수 없는 요청', '<br>'.join(c['unsupported']), bad=True))
+    return ("<table style='width:100%;border-collapse:collapse;border:1.5px solid #f3b79b;border-radius:8px;overflow:hidden;font-size:14.5px'>"
+            "<tr style='background:#fdeee6'><td colspan=2 style='padding:9px 12px;font-weight:700'>🧠 AI가 읽은 조건표</td></tr>"
+            + ''.join(rows) + '</table>')
+
+
 def page_goal():
     st.title('① 목표 입력')
-    role_strip('담당자의 <b>말로 된 목표</b>를 엔진이 읽을 수 있는 조건으로 바꾸고, 반영할 수 없는 요청은 이유와 함께 알려 줍니다',
-               '바뀐 조건으로 <b>최적 코스를 계산</b>합니다 — 공인 거리·회귀 금지·재방문 금지·금지 구간은 항상 지켜집니다')
-    examples = ['건대입구역 근처는 피해 줘', '출발을 8시로 늦춰 줘', '10K로 바꾸고 합정역 근처는 피해 줘', '하프 코스로 바꿔 줘']
-    st.markdown('**어떤 코스를 원하세요?** 문장으로 적으면 AI가 조건을 읽고 엔진이 바로 계산합니다.')
-    st.caption('예) ' + ' · '.join(f'“{ex}”' for ex in examples))
-    goal = st.text_area('목표', key='goal_text', height=90, label_visibility='collapsed',
-                        placeholder='예) 건대입구역 근처는 피하고 출발을 7시로 당겨 줘.')
+    role_strip('담당자의 <b>말로 된 목표</b>를 조건표로 바꿔 보여 주고, 반영할 수 없는 요청은 이유와 함께 알려 줍니다',
+               '확인된 조건표로 <b>최적 코스를 계산</b>합니다 — 공인 거리·회귀 금지·재방문 금지·금지 구간은 항상 지켜집니다')
     if not KEY:
         st.info('AI가 연결되지 않았습니다 (Streamlit secrets에 ANTHROPIC_API_KEY).')
-    if not st.button('🧠 AI로 코스 계산', type='primary', disabled=not (KEY and goal.strip())):
+    pend = st.session_state.get('pending')
+
+    if pend is None:                                       # 1) 문장 입력
+        examples = ['건대입구역에서 출발해서 올림픽공원에 도착, 8시 출발', '10K로 바꾸고 합정역 근처는 피해 줘', '하프 코스로 바꿔 줘']
+        st.markdown('**어떤 코스를 원하세요?** 출발지·도착지·출발 시각·피할 장소·종목을 문장으로 적어 주세요.')
+        st.caption('예) ' + ' · '.join(f'“{ex}”' for ex in examples))
+        goal = st.text_area('목표', key='goal_text', height=90, label_visibility='collapsed',
+                            placeholder='예) 광화문에서 출발해 잠실에 도착, 7시 출발, 건대입구역 근처는 피해 줘')
+        if st.button('🧠 조건표 만들기', type='primary', disabled=not (KEY and goal.strip())):
+            with st.spinner('AI가 문장을 읽는 중…'):
+                st.session_state['pending'] = interpret(goal.strip())
+            st.rerun()
         return
-    with st.spinner('AI가 목표를 읽는 중…'):
-        card, err = llm_call(llm.interpret_goal, goal, describe_params(S.params))
-    if err:
-        st.error(err); return
-    changed = card.event or card.start_place or card.finish_place or card.start_hour is not None or card.avoid_places
-    if not changed:
-        for u in card.unsupported:
-            st.warning(f'반영할 수 없는 요청: {u}')
-        st.info(card.question or '바꿀 조건을 찾지 못했습니다. 종목·출발지·도착지·출발 시각·피할 장소 중 무엇을 바꿀지 적어 주세요.')
+
+    # 2) 조건표 확인
+    st.markdown(f"**입력한 내용** — “{pend['text']}”")
+    if pend.get('error'):
+        st.error(pend['error'])
+        if st.button('다시 입력'):
+            st.session_state.pop('pending'); st.rerun()
         return
-    newp, err = build_params(S, event=card.event, start_place=card.start_place, finish_place=card.finish_place,
-                             start_hour=card.start_hour, avoid_places=card.avoid_places)
-    if err:
-        st.error(f"{err.get('항목', '')} {err.get('error', '')}")
-        if err.get('후보'):
-            st.info('이 중 하나로 다시 적어 주세요: ' + ', '.join(err['후보']))
-        return
-    res = run_solve(newp)
-    if not res.get('ok'):
-        st.error(f"조건을 만족하는 코스가 없습니다: {res.get('reason')} — 피할 장소를 줄이거나 출발·도착을 바꿔 보세요.")
-        return
-    S.params, S.result = newp, res
-    for k in ('briefing', 'tradeoff', 'cf', 'cf_ai'):
-        st.session_state.pop(k, None)
-    st.session_state['ai_note'] = dict(goal=goal, unsupported=card.unsupported, question=card.question)
-    st.switch_page(PAGES['result'])
+    st.markdown(condition_html(pend), unsafe_allow_html=True)
+    e = pend['perr']
+    if e:
+        st.warning(f"{e.get('항목', '')}: {e.get('error', '')}" + (f" 후보: {', '.join(e['후보'])}" if e.get('후보') else ''))
+    if pend['card'].get('question'):
+        st.info(f"AI 확인 질문: {pend['card']['question']}")
+    st.markdown('#### 이 조건으로 코스를 만들까요?')
+    c1, c2, c3 = st.columns([2, 2, 1])
+    yes = c1.button('✅ 네, 맞습니다 — 코스 계산', type='primary', width='stretch', disabled=bool(e))
+    fix = c2.button('✏️ 아니요, 보강할게요', width='stretch')
+    if c3.button('처음부터', width='stretch'):
+        st.session_state.pop('pending'); st.session_state.pop('fixing', None); st.rerun()
+    if fix:
+        st.session_state['fixing'] = True
+    if st.session_state.get('fixing') or e:                # 3) 보강: 원래 문장 + 추가 설명으로 다시 해석
+        more = st.text_input('무엇을 고치거나 더할까요?', key='fix_text', placeholder='예) 도착은 올림픽공원이 아니라 잠실종합운동장으로')
+        if st.button('🧠 보강해서 다시 조건표 만들기', disabled=not (KEY and more.strip())):
+            with st.spinner('AI가 보강 내용을 반영하는 중…'):
+                st.session_state['pending'] = interpret(f"{pend['text']}\n(보강) {more.strip()}")
+            st.session_state.pop('fixing', None); st.session_state.pop('fix_text', None)
+            st.rerun()
+    if yes:                                                # 4) 확정 → 계산 → 2단계
+        newp = pend['params']
+        res = run_solve(newp)
+        if not res.get('ok'):
+            st.error(f"조건을 만족하는 코스가 없습니다: {res.get('reason')} — '보강할게요'로 피할 장소를 줄이거나 출발·도착을 바꿔 보세요.")
+            return
+        S.params, S.result = newp, res
+        for k in ('briefing', 'tradeoff', 'cf', 'cf_ai', 'pending', 'fixing'):
+            st.session_state.pop(k, None)
+        st.session_state['ai_note'] = dict(goal=pend['text'], unsupported=pend['card']['unsupported'], question=None)
+        st.switch_page(PAGES['result'])
 
 
 # ───────────────────────── ② 결과 비교 ─────────────────────────
@@ -494,14 +553,14 @@ def _flow(down, up):
 
 
 ARCH_HTML = (
-    _layer('① 사용자 화면 — Streamlit', ['<b>① 목표 입력</b><br>말로 목표 입력 → 바로 계산', '<b>② 결과 비교</b><br>지도·KPI·여러 안·도로 빼고 재계산',
+    _layer('① 사용자 화면 — Streamlit', ['<b>① 목표 입력</b><br>문장 입력 → 조건표 확인·보강', '<b>② 결과 비교</b><br>지도·KPI·여러 안·도로 빼고 재계산',
                                          '<b>③ 협의 자료</b><br>기관별 브리핑·통제 시각표·노선·코스 파일', '<b>AI 어시스턴트</b><br>질문·조건 변경'], '#eaf2fc', '#9ec5f0')
     + _flow('자연어 목표 · 질문', '설명 · 브리핑 · 코스 · KPI')
     + _layer('② LLM 계층 — Claude Opus 5.5 · 말 ↔ 조건, 숫자 → 말 (숫자는 만들지 않음)',
              ['<b>목표 → 엔진 조건</b><br>구조화 출력 · 반영 불가 요청 알림', '<b>도구 호출 에이전트</b><br>Tool Runner · 도구 6종',
               '<b>장단점 요약 · 이유 설명</b><br>여러 안 비교 · 반사실 결과 해석', '<b>기관별 브리핑</b><br>서울시 · 경찰 · 운수사',
               '<b>숫자 대조 검사</b><br>엔진에 없는 숫자 경고'], '#fdeee6', '#f3b79b')
-    + _flow('엔진 조건 · 도구 호출', 'facts — 엔진이 계산한 숫자만')
+    + _flow('조건표 (사람 확인 후) · 도구 호출', 'facts — 엔진이 계산한 숫자만')
     + _layer('③ 최적화 엔진 — runway · 조건 → 코스·숫자', ['<b>조건 검증</b><br>Pydantic · 장소는 정류소 데이터에서만',
                                                          '<b>시나리오</b><br>위치별 통제 시간 × 정류장 수요', '<b>MILP</b><br>PuLP + HiGHS<br>LP 완화 → 회랑 → MILP',
                                                          '<b>정밀 평가 · 규칙 검사</b><br>10m 단위 · 독립 검증', '<b>결과 저장</b><br>더 좋은 해만 교체 · 반사실 재계산'],
@@ -530,9 +589,9 @@ def _steps(title, steps):
 FLOW_HTML = (
     _steps('1단계 · 목표를 조건으로 (① 목표 입력)', [
         ('h', '목표를 말로 입력', '“건대입구역 근처는 피해 줘”', ''),
-        ('l', '조건 해석', '종목·출발·도착·시각·피할 장소 · 반영 불가 요청 알림', ''),
+        ('l', '조건표 작성', '종목·출발·도착·시각·피할 장소 · 반영 불가 요청 알림', ''),
         ('q', '장소가 데이터에 있나?', '정류소 위치에서 검색', '아니오·여러 곳 → 후보 제시, 사람이 선택'),
-        ('e', '조건 검증', '허용 범위 · 데이터 영역 확인', '')])
+        ('h', '“이 조건이 맞습니까?”', 'HTML 조건표 확인', '아니요 → 문장으로 보강 → AI가 다시 조건표')])
     + _steps('2단계 · 조건을 코스로 (② 결과 비교)', [
         ('e', 'MILP 풀이', '사전 계산이면 즉시, 아니면 10초~2분', ''),
         ('q', '해가 있나?', '규칙을 모두 지키는 코스', '아니오 → 이유 + 완화 후보 → 1단계로'),
