@@ -232,7 +232,6 @@ with st.sidebar:
         for k in ('briefing', 'tradeoff', 'cf', 'cf_ai', 'ai_card'):
             st.session_state.pop(k, None)
         st.rerun()
-    st.caption(f'현재 조건: {describe_params(S.params)}')
     st.caption(f"현재 코스: {S.result['kpi']['length_km']}km · 못 타는 승객 {S.result['kpi']['riders']:,}명")
     st.divider()
     st.caption(f'LLM: {MODEL} ' + ('● 연결됨' if KEY else '○ 미연결 — AI 단계는 수동 입력·규칙 기반 자료로 대신합니다'))
@@ -290,7 +289,6 @@ def page_result():
                '도로 1,000여 개 구간 조합에서 <b>못 타는 승객</b>이 최소인 코스를 찾고, 도로를 빼며 <b>다시 계산</b>해 근거를 만듭니다')
     p, R, A = S.params, S.result, S.ensure_asis()
     ev = event_of(p)
-    st.caption(f'현재 조건: {describe_params(p)}')
     if (note := st.session_state.pop('ai_note', None)):
         st.success(f"“{note['goal']}” → AI가 조건을 읽고 엔진이 다시 계산했습니다.")
         for u in note['unsupported']:
@@ -403,7 +401,6 @@ def page_docs():
                '<b>구간별 통제 시각표, 영향 노선 목록, 코스 파일</b>을 그대로 만들어 냅니다')
     R, A = S.result, S.ensure_asis()
     f = report.facts(R, A)
-    st.caption(f'대상 코스: {describe_params(S.params)}')
     c1, c2 = st.columns([1, 3])
     if c1.button('🧠 AI 브리핑 작성', type='primary', disabled=not KEY):
         with st.spinner('AI가 브리핑을 쓰는 중…'):
