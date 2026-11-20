@@ -77,8 +77,10 @@ def _resolve(s: Session, query: str, area=None):
     c = [h for h in s.engine.places(query, area=area) if h['in_area']]
     if not c:
         out = s.engine.places(query, area=area)
-        return None, dict(error=f"'{query}'를 이 종목의 분석 영역 안에서 찾지 못했습니다.",
-                          영역밖_후보=[h['name'] for h in out[:5]])
+        if out:                                    # 데이터에는 있지만 이 종목 도로망 범위 밖 (예: 풀코스에서 합정역·여의도역)
+            return None, dict(error=f"'{query}'는 이 종목의 코스 범위 밖입니다 (풀코스·하프: 광화문~잠실 동부 / 10K: 상암~여의도 서부).",
+                              범위밖=True, 영역밖_후보=[h['name'] for h in out[:5]])
+        return None, dict(error=f"'{query}'를 정류소·장소 데이터에서 찾지 못했습니다. 근처 역·정류장 이름으로 적어 주세요.")
     if c[0]['match'] == 'exact' or len(c) == 1:
         return c[0], None
     return None, dict(error=f"'{query}' 후보가 여러 곳입니다. 사용자에게 고르게 하거나 정확한 이름으로 다시 호출하세요.",
@@ -86,9 +88,10 @@ def _resolve(s: Session, query: str, area=None):
 
 
 def build_params(s: Session, event=None, start_place=None, finish_place=None, start_hour=None, avoid_places=(), radius=150.0,
-                 clear_forbidden=False, reset=False):
+                 clear_forbidden=False, reset=False, notes: list | None = None):
     """조건표 → Params (채팅 도구와 ① 목표 입력 화면이 같은 경로로 검증). 반환: (Params, None) 또는 (None, 오류 dict)
-    장소는 정류소 위치 데이터에서만 찾는다 — 없거나 애매하면 오류와 후보를 돌려준다."""
+    장소는 정류소 위치 데이터에서만 찾는다 — 없거나 애매하면 오류와 후보를 돌려준다.
+    피할 장소가 이 종목 코스 범위 밖이면 오류가 아니다: 코스가 원래 지나지 않으므로 건너뛰고 notes에 적는다."""
     ev_key = s.params.EVENT
     if event:
         ev_key = event if event in EVENTS else parse_event(event)
@@ -107,6 +110,10 @@ def build_params(s: Session, event=None, start_place=None, finish_place=None, st
     forb = () if clear_forbidden else tuple(p.FORBID)
     for q in avoid_places or ():
         hit, err = _resolve(s, q, p.AREA)
+        if err and err.get('범위밖'):
+            if notes is not None:
+                notes.append(f'{q}: 이 종목 코스 범위 밖이라 원래 지나지 않음')
+            continue
         if err:
             return None, dict(항목=f'피할 장소({q})', **err)
         if all(z.name != hit['name'] for z in forb):
@@ -154,7 +161,8 @@ def make_tools(s: Session) -> list:
         args = {k: v for k, v in dict(event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour,
                                       add_forbidden_place=add_forbidden_place, clear_forbidden=clear_forbidden,
                                       reset=reset).items() if v not in (None, False)}
-        newp, err = build_params(s, event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour,
+        notes = []
+        newp, err = build_params(s, event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour, notes=notes,
                                  avoid_places=[add_forbidden_place] if add_forbidden_place else [], radius=forbidden_radius_m,
                                  clear_forbidden=clear_forbidden, reset=reset)
         if err:
@@ -165,7 +173,7 @@ def make_tools(s: Session) -> list:
             hint = ['금지 구간 해제', '출발·도착을 분석 영역 중심 쪽으로', '피할 장소 줄이기']
             return record('optimize_course', args, dict(ok=False, 조건=describe_params(newp), 이유=res['reason'], 완화_후보=hint))
         s.params, s.result = newp, res
-        return record('optimize_course', args, dict(ok=True, **summarize(s, res)))
+        return record('optimize_course', args, dict(ok=True, **summarize(s, res), **({'참고': notes} if notes else {})))
 
     @beta_tool
     def get_current_result() -> str:

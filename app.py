@@ -236,16 +236,18 @@ def interpret(text: str):
     card, err = llm_call(llm.interpret_goal, text, describe_params(S.params))
     if err:
         return dict(text=text, error=err)
-    newp, perr = build_params(S, event=card.event, start_place=card.start_place, finish_place=card.finish_place,
+    notes = []
+    newp, perr = build_params(S, event=card.event, start_place=card.start_place, finish_place=card.finish_place, notes=notes,
                               start_hour=card.start_hour, avoid_places=card.avoid_places)
-    return dict(text=text, card=card.model_dump(), params=newp, perr=perr)
+    return dict(text=text, card=card.model_dump(), params=newp, perr=perr, notes=notes)
 
 
 def _view(pend) -> dict:
     """확인용 조건 값 (계산된 Params가 있으면 그 값, 없으면 AI가 읽은 값 + 현재 값)"""
     c, q, cur = pend['card'], pend['params'], S.params
     if q is not None:
-        return dict(event=q.EVENT, start=q.START_NAME, finish=q.FINISH_NAME, t0=q.T0, avoid=[z.name for z in q.FORBID])
+        out = [n.split(':')[0] for n in pend.get('notes') or []]
+        return dict(event=q.EVENT, start=q.START_NAME, finish=q.FINISH_NAME, t0=q.T0, avoid=[z.name for z in q.FORBID] + out)
     return dict(event=c['event'] or cur.EVENT, start=c['start_place'] or cur.START_NAME, finish=c['finish_place'] or cur.FINISH_NAME,
                 t0=c['start_hour'] if c['start_hour'] is not None else cur.T0,
                 avoid=c['avoid_places'] or [z.name for z in cur.FORBID])
@@ -266,7 +268,9 @@ def condition_html(pend) -> str:
             row('출발지', v['start'], v['start'] != cur.START_NAME, '출발지' in bad),
             row('도착지', v['finish'], v['finish'] != cur.FINISH_NAME, '도착지' in bad),
             row('출발 시각', f"일요일 {hm(v['t0'])}", v['t0'] != cur.T0),
-            row('피할 장소', ', '.join(v['avoid']) or '없음', v['avoid'] != [z.name for z in cur.FORBID], '피할 장소' in bad)]
+            row('피할 장소', (', '.join(v['avoid']) or '없음')
+                + ''.join(f"<br><span style='font-size:12.5px;color:#52514e;font-weight:400'>· {n}</span>" for n in pend.get('notes') or []),
+                v['avoid'] != [z.name for z in cur.FORBID], '피할 장소' in bad)]
     if pend['card']['unsupported']:
         rows.append(row('반영할 수 없는 요청', '<br>'.join(pend['card']['unsupported']), err=True))
     return ("<table style='width:100%;border-collapse:collapse;border:1.5px solid #f3b79b;font-size:14.5px'>"
@@ -299,11 +303,12 @@ def apply_table_edit(pend, df) -> dict:
     base = params_for(ev_key) if ev_key != S.params.EVENT else S.params
     keep = tuple(z for z in base.FORBID if z.name in avoid)                     # 이미 있는 금지 구간은 그대로 유지
     card.update(event=ev_key, start_place=val['출발지'], finish_place=val['도착지'], start_hour=t0, avoid_places=avoid)
-    newp, err = build_params(S, event=ev_key, start_place=str(val['출발지']).strip(), finish_place=str(val['도착지']).strip(),
+    notes = []
+    newp, err = build_params(S, event=ev_key, start_place=str(val['출발지']).strip(), finish_place=str(val['도착지']).strip(), notes=notes,
                              start_hour=t0, clear_forbidden=True, avoid_places=[x for x in avoid if x not in {z.name for z in keep}])
     if newp is not None:
         newp = newp.with_(FORBID=keep + tuple(newp.FORBID))
-    return dict(pend, card=card, params=newp, perr=err)
+    return dict(pend, card=card, params=newp, perr=err, notes=notes)
 
 
 def page_goal():
