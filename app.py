@@ -386,7 +386,7 @@ def page_goal():
 # ───────────────────────── ② 결과 비교 ─────────────────────────
 def page_result():
     st.title('② 결과 비교')
-    role_strip('여러 안의 <b>장단점을 말로 정리</b>하고, 엔진이 고른 도로가 <b>왜 최선인지</b> 설명합니다',
+    role_strip('AS-IS와 TO-BE의 <b>장단점을 말로 정리</b>하고, 엔진이 고른 도로가 <b>왜 최선인지</b> 설명합니다',
                '도로 1,000여 개 구간 조합에서 <b>못 타는 승객</b>이 최소인 코스를 찾고, 도로를 빼며 <b>다시 계산</b>해 근거를 만듭니다')
     p, R, A = S.params, S.result, S.ensure_asis()
     ev = event_of(p)
@@ -402,32 +402,33 @@ def page_result():
                 + f"<span style='color:{C_TOBE}'>━━</span> TO-BE (RunWay 최적 코스) &nbsp; ● 출발·도착 &nbsp; 점·선에 마우스를 올리면 이름과 KPI",
                 unsafe_allow_html=True)
 
-    # P1-6 여러 안 나란히
+    # P1-6 AS-IS vs TO-BE (항상 2026 공식 코스 vs 현재 TO-BE — 새로 계산하면 그 결과가 현재 TO-BE)
     st.divider()
-    st.subheader('여러 안 나란히 비교')
-    lib = [x for x in eng.library() if x['params'].EVENT == p.EVENT]
-    opts = {'현재 코스 (TO-BE)': R} | {x['조건']: dict(eng.cached(x['params']), params=x['params'].model_dump(mode='json')) for x in lib}
-    if A:
-        opts = {'AS-IS (2026 공식 코스)': A} | opts
-    chosen = st.multiselect('비교할 안 (최대 3개)', list(opts), default=list(opts)[:2], max_selections=3)
-    if chosen:
-        st.dataframe(pd.DataFrame([{'지표': lab, **{nm: opts[nm]['kpi'][k] for nm in chosen}} for lab, k, _ in KPI_LABELS]),
-                     hide_index=True, width='stretch')
-        if len(chosen) >= 2:
-            fx = {nm: report.facts(opts[nm] if 'order' in opts[nm] else R, None)['TO_BE'] | {'조건': nm} for nm in chosen}
-            if st.button('🧠 AI로 장단점 요약', disabled=not KEY):
-                with st.spinner('AI가 안들을 비교하는 중…'):
-                    t, err = llm_call(llm.compare_options, fx)
-                st.session_state['tradeoff'] = dict(err=err) if err else dict(t=t.model_dump(), warn=llm.check_numbers(t, fx), names=chosen)
-            tr = st.session_state.get('tradeoff')
-            if tr and tr.get('names') == chosen:
-                show_tradeoff(tr['t'], tr['warn'])
-            elif tr and tr.get('err'):
-                st.error(tr['err'])
-            if not KEY:
-                best = min(chosen, key=lambda nm: opts[nm]['kpi']['riders']); simp = min(chosen, key=lambda nm: opts[nm]['kpi']['turns'])
-                st.info(f"규칙 기반 요약 (AI 미연결): 못 타는 승객이 가장 적은 안은 **{best}** ({opts[best]['kpi']['riders']:,}명), "
-                        f"방향 전환이 가장 적은 안은 **{simp}** ({opts[simp]['kpi']['turns']}회).")
+    st.subheader('AS-IS vs TO-BE 비교')
+    if A is None:
+        st.info('이 종목은 기존(AS-IS) 코스 데이터가 없어 비교하지 않습니다.')
+    else:
+        st.caption(f"AS-IS: 2026 공식 코스 ({A.get('source', '')}) · TO-BE: 현재 조건으로 계산한 RunWay 코스 — {describe_params(p)}")
+        course_map([(A, 'AS-IS', C_ASIS), (R, 'TO-BE', C_TOBE)], p, key='cmp_map', height=420, turn_file=ev.asis_file)
+        st.markdown(f"<span style='color:{C_ASIS}'>━━</span> AS-IS (2026 공식 코스) &nbsp; <span style='color:{C_TOBE}'>━━</span> TO-BE (현재 코스)",
+                    unsafe_allow_html=True)
+        rows = []
+        for lab, k, _ in KPI_LABELS:
+            av, tv = A['kpi'][k], R['kpi'][k]
+            rows.append({'지표': lab, 'AS-IS': av, 'TO-BE': tv,
+                         '변화(%)': (f'{(tv - av) / av * 100:+.0f}%'.replace('-', '−') if av else '–') if tv != av else '0%'})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+        tag = f"{R['objective_exact']}-{len(R['order'])}-{p.EVENT}"          # TO-BE가 바뀌면 요약도 새로
+        fx = {'AS-IS (2026 공식 코스)': report.facts(A, None)['TO_BE'], '현재 TO-BE': report.facts(R, None)['TO_BE']}
+        if st.button('🧠 AI로 장단점 요약', disabled=not KEY):
+            with st.spinner('AI가 두 코스를 비교하는 중…'):
+                t, err = llm_call(llm.compare_options, fx)
+            st.session_state['tradeoff'] = dict(err=err) if err else dict(t=t.model_dump(), warn=llm.check_numbers(t, fx), tag=tag)
+        tr = st.session_state.get('tradeoff')
+        if tr and tr.get('tag') == tag:
+            show_tradeoff(tr['t'], tr['warn'])
+        elif tr and tr.get('err'):
+            st.error(tr['err'])
 
     # P1-7 왜 이 길인가
     st.divider()
@@ -600,12 +601,12 @@ def _flow(down, up):
 
 
 ARCH_HTML = (
-    _layer('① 사용자 화면 — Streamlit', ['<b>① 목표 입력</b><br>문장 입력 → 조건표 확인·보강', '<b>② 결과 비교</b><br>지도·KPI·여러 안·도로 빼고 재계산',
+    _layer('① 사용자 화면 — Streamlit', ['<b>① 목표 입력</b><br>문장 입력 → 조건표 확인·보강', '<b>② 결과 비교</b><br>지도·KPI·AS-IS vs TO-BE·도로 빼고 재계산',
                                          '<b>③ 협의 자료</b><br>기관별 브리핑·통제 시각표·노선·코스 파일', '<b>AI 어시스턴트</b><br>질문·조건 변경'], '#eaf2fc', '#9ec5f0')
     + _flow('자연어 목표 · 질문', '설명 · 브리핑 · 코스 · KPI')
     + _layer('② LLM 계층 — Claude Opus 5.5 · 말 ↔ 조건, 숫자 → 말 (숫자는 만들지 않음)',
              ['<b>목표 → 엔진 조건</b><br>구조화 출력 · 반영 불가 요청 알림', '<b>도구 호출 에이전트</b><br>Tool Runner · 도구 6종',
-              '<b>장단점 요약 · 이유 설명</b><br>여러 안 비교 · 반사실 결과 해석', '<b>기관별 브리핑</b><br>서울시 · 경찰 · 운수사',
+              '<b>장단점 요약 · 이유 설명</b><br>AS-IS vs TO-BE · 반사실 결과 해석', '<b>기관별 브리핑</b><br>서울시 · 경찰 · 운수사',
               '<b>숫자 대조 검사</b><br>엔진에 없는 숫자 경고'], '#fdeee6', '#f3b79b')
     + _flow('조건표 (사람 확인 후) · 도구 호출', 'facts — 엔진이 계산한 숫자만')
     + _layer('③ 최적화 엔진 — runway · 조건 → 코스·숫자', ['<b>조건 검증</b><br>Pydantic · 장소는 정류소 데이터에서만',
@@ -643,7 +644,7 @@ FLOW_HTML = (
         ('e', 'MILP 풀이', '사전 계산이면 즉시, 아니면 10초~2분', ''),
         ('q', '해가 있나?', '규칙을 모두 지키는 코스', '아니오 → 이유 + 완화 후보 → 1단계로'),
         ('e', '규칙 검사 · 정밀 평가', '거리 · 회귀 · 재방문 · 금지 구간', ''),
-        ('e', '여러 안 비교 · 도로 빼고 재계산', '“왜 이 길인가”의 숫자 근거', '')])
+        ('e', 'AS-IS vs TO-BE · 도로 빼고 재계산', '“왜 이 길인가”의 숫자 근거', '')])
     + _steps('3단계 · 숫자를 협의 자료로 (③ 협의 자료)', [
         ('l', '장단점 · 이유 · 기관별 브리핑', '엔진 facts만 인용', ''),
         ('q', '숫자가 엔진 결과와 일치?', '자동 대조', '아니오 → 근거 없는 숫자 경고 표시'),
@@ -660,7 +661,7 @@ def page_how():
 - **목표가 말로 온다.** "10K로 바꾸고 합정역 근처는 피해 줘"처럼 담당자의 요구는 조건 여러 개가 섞인 문장이다. 슬라이더로는 *피할 장소* 같은 열린 조건과 조합을 입력하기 어렵다 → **엔진 조건으로 번역**
 - **반영할 수 없는 요구를 걸러 낸다.** "반드시 ○○로를 지나기"처럼 엔진이 다루지 못하는 요청은 이유와 함께 표시하고, 애매하면 **되묻는다**
 - **숫자를 기관의 언어로 바꾼다.** 같은 결과라도 서울시(노선), 경찰(교차로·통제 시각), 운수사(정류장)가 알아야 할 것이 다르다 → **기관별 브리핑**
-- **트레이드오프를 설명한다.** 엔진은 '최적'만 알려 준다. 여러 안 사이에서 *무엇을 얻고 잃는지*는 말로 풀어야 결정할 수 있다""")
+- **트레이드오프를 설명한다.** 엔진은 '최적'만 알려 준다. 기존 코스와 비교해 *무엇을 얻고 잃는지*는 말로 풀어야 결정할 수 있다""")
         st.markdown('**LLM에게 맡기지 않는 것**: 코스 경로와 모든 숫자. 그럴듯한 숫자를 지어낼 수 있어서 → 숫자는 엔진만, 답변 숫자는 자동 대조.')
     with c2, st.container(border=True):
         st.markdown('#### ⚙️ 왜 최적화 엔진이 필요한가')
