@@ -24,6 +24,15 @@ def in_bbox(ll: LatLon, area=None) -> bool:
     return a[0] <= ll[0] <= a[1] and a[2] <= ll[1] <= a[3]
 
 
+def _plain(v):
+    """pydantic 모델(어느 모듈 사본이든) → dict, 튜플·리스트는 안쪽까지"""
+    if isinstance(v, BaseModel):
+        return v.model_dump()
+    if isinstance(v, (tuple, list)):
+        return type(v)(_plain(x) for x in v)
+    return v
+
+
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra='forbid')
 
@@ -100,8 +109,10 @@ class Params(_Frozen):
 
     # ── 도우미 ──
     def with_(self, **kw) -> 'Params':
-        """일부 값만 바꾼 새 Params (검증 포함)"""
-        return Params.model_validate({**self.model_dump(), **kw})
+        """일부 값만 바꾼 새 Params (검증 포함).
+        값 안의 모델(Forbid 등)은 dict로 풀어서 넘긴다 — Streamlit Cloud가 코드 일부만 다시 불러오면 같은 이름의
+        클래스가 둘이 되어 'valid instance of Forbid'가 아니라는 검증 오류가 나기 때문"""
+        return Params.model_validate({**self.model_dump(), **{k: _plain(v) for k, v in kw.items()}})
 
     def key(self, *fields: str) -> str:
         """캐시 키: 지정 필드(없으면 전체)의 해시"""
