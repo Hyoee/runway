@@ -224,17 +224,9 @@ def show_tradeoff(t, warn):
 # ───────────────────────── 사이드바 ─────────────────────────
 with st.sidebar:
     st.markdown('### 🏃 RunWay')
-    ev_keys = list(EVENTS)
-    pick = st.radio('종목', ev_keys, index=ev_keys.index(S.params.EVENT), format_func=lambda k: EVENTS[k].label, horizontal=True)
-    if pick != S.params.EVENT:
-        with st.spinner(f'{EVENTS[pick].label} 코스 불러오는 중…'):
-            TOOLS['optimize_course'].call(dict(event=pick))
-        for k in ('briefing', 'tradeoff', 'cf', 'cf_ai', 'ai_card'):
-            st.session_state.pop(k, None)
-        st.rerun()
     st.caption(f"현재 코스: {S.result['kpi']['length_km']}km · 못 타는 승객 {S.result['kpi']['riders']:,}명")
     st.divider()
-    st.caption(f'LLM: {MODEL} ' + ('● 연결됨' if KEY else '○ 미연결 — AI 단계는 수동 입력·규칙 기반 자료로 대신합니다'))
+    st.caption(f'LLM: {MODEL} ' + ('● 연결됨' if KEY else '○ 미연결'))
     st.caption('데이터: 서울 열린데이터광장 버스 승하차(2026-10)·정류소 위치, © OpenStreetMap contributors')
 
 
@@ -245,13 +237,11 @@ def page_goal():
                '바뀐 조건으로 <b>최적 코스를 계산</b>합니다 — 공인 거리·회귀 금지·재방문 금지·금지 구간은 항상 지켜집니다')
     examples = ['건대입구역 근처는 피해 줘', '출발을 8시로 늦춰 줘', '10K로 바꾸고 합정역 근처는 피해 줘', '하프 코스로 바꿔 줘']
     st.markdown('**어떤 코스를 원하세요?** 문장으로 적으면 AI가 조건을 읽고 엔진이 바로 계산합니다.')
-    for c, ex in zip(st.columns(len(examples)), examples):
-        if c.button(ex, key=f'ex_{ex}', width='stretch'):
-            st.session_state['goal_text'] = ex
+    st.caption('예) ' + ' · '.join(f'“{ex}”' for ex in examples))
     goal = st.text_area('목표', key='goal_text', height=90, label_visibility='collapsed',
                         placeholder='예) 건대입구역 근처는 피하고 출발을 7시로 당겨 줘.')
     if not KEY:
-        st.info('AI가 연결되지 않았습니다 (Streamlit secrets에 ANTHROPIC_API_KEY). 종목은 왼쪽 사이드바에서 바꿀 수 있습니다.')
+        st.info('AI가 연결되지 않았습니다 (Streamlit secrets에 ANTHROPIC_API_KEY).')
     if not st.button('🧠 AI로 코스 계산', type='primary', disabled=not (KEY and goal.strip())):
         return
     with st.spinner('AI가 목표를 읽는 중…'):
@@ -289,6 +279,7 @@ def page_result():
                '도로 1,000여 개 구간 조합에서 <b>못 타는 승객</b>이 최소인 코스를 찾고, 도로를 빼며 <b>다시 계산</b>해 근거를 만듭니다')
     p, R, A = S.params, S.result, S.ensure_asis()
     ev = event_of(p)
+    st.caption(f'현재 조건: {describe_params(p)}')
     if (note := st.session_state.pop('ai_note', None)):
         st.success(f"“{note['goal']}” → AI가 조건을 읽고 엔진이 다시 계산했습니다.")
         for u in note['unsupported']:
