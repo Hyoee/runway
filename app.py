@@ -46,7 +46,7 @@ import runway  # noqa: E402
 from runway import DEFAULT, Engine, in_bbox  # noqa: E402
 from runway.engine import describe_params  # noqa: E402
 from runway.evaluate import KPI_LABELS  # noqa: E402
-from runway.events import EVENTS, event_of, params_for  # noqa: E402
+from runway.events import EVENTS, event_of, params_for, parse_event  # noqa: E402
 from runway import report  # noqa: E402
 
 runway.__app_version__ = VERSION
@@ -241,39 +241,75 @@ def interpret(text: str):
     return dict(text=text, card=card.model_dump(), params=newp, perr=perr)
 
 
+def _view(pend) -> dict:
+    """확인용 조건 값 (계산된 Params가 있으면 그 값, 없으면 AI가 읽은 값 + 현재 값)"""
+    c, q, cur = pend['card'], pend['params'], S.params
+    if q is not None:
+        return dict(event=q.EVENT, start=q.START_NAME, finish=q.FINISH_NAME, t0=q.T0, avoid=[z.name for z in q.FORBID])
+    return dict(event=c['event'] or cur.EVENT, start=c['start_place'] or cur.START_NAME, finish=c['finish_place'] or cur.FINISH_NAME,
+                t0=c['start_hour'] if c['start_hour'] is not None else cur.T0,
+                avoid=c['avoid_places'] or [z.name for z in cur.FORBID])
+
+
 def condition_html(pend) -> str:
     """AI가 읽은 조건을 확인용 HTML 표로 (읽기 전용)"""
-    c, q, e = pend['card'], pend['params'], pend['perr']
-    cur = S.params
+    v, cur, bad = _view(pend), S.params, (pend['perr'] or {}).get('항목', '')
 
-    def row(k, v, changed=False, bad=False):
-        bg = '#fdecea' if bad else ('#fdeee6' if changed else '#ffffff')
-        tag = (" <span style='font-size:11px;color:#c0392b'>확인 필요</span>" if bad else
+    def row(k, val, changed=False, err=False):
+        bg = '#fdecea' if err else ('#fdeee6' if changed else '#ffffff')
+        tag = (" <span style='font-size:11px;color:#c0392b'>확인 필요</span>" if err else
                (" <span style='font-size:11px;color:#d4542a'>변경</span>" if changed else ''))
         return (f"<tr style='background:{bg}'><td style='padding:8px 12px;border-bottom:1px solid #e8e6e1;width:150px;color:#52514e'>{k}</td>"
-                f"<td style='padding:8px 12px;border-bottom:1px solid #e8e6e1'><b>{v}</b>{tag}</td></tr>")
-    base = q or cur
-    bad = (e or {}).get('항목', '')
-    ev = EVENTS[c['event'] or base.EVENT]
-    t0 = c['start_hour'] if c['start_hour'] is not None else base.T0
-    rows = [row('종목', f'{ev.label} ({ev.distance_m / 1000:g}km)', ev.key != cur.EVENT),
-            row('출발지', c['start_place'] if '출발지' in bad else base.START_NAME, bool(c['start_place']), '출발지' in bad),
-            row('도착지', c['finish_place'] if '도착지' in bad else base.FINISH_NAME, bool(c['finish_place']), '도착지' in bad),
-            row('출발 시각', f'일요일 {hm(t0)}', c['start_hour'] is not None),
-            row('피할 장소', ', '.join(c['avoid_places']) if c['avoid_places'] else
-                (', '.join(z.name for z in base.FORBID) or '없음'), bool(c['avoid_places']), '피할 장소' in bad),
-            row('항상 지키는 규칙', '공인 거리 · 회귀 금지 · 재방문 금지 · 같은 교차로 1회 · 금지 구간 회피')]
-    if c['unsupported']:
-        rows.append(row('반영할 수 없는 요청', '<br>'.join(c['unsupported']), bad=True))
-    return ("<table style='width:100%;border-collapse:collapse;border:1.5px solid #f3b79b;border-radius:8px;overflow:hidden;font-size:14.5px'>"
+                f"<td style='padding:8px 12px;border-bottom:1px solid #e8e6e1'><b>{val}</b>{tag}</td></tr>")
+    ev = EVENTS[v['event']]
+    rows = [row('종목', f'{ev.label} ({ev.distance_m / 1000:g}km)', v['event'] != cur.EVENT),
+            row('출발지', v['start'], v['start'] != cur.START_NAME, '출발지' in bad),
+            row('도착지', v['finish'], v['finish'] != cur.FINISH_NAME, '도착지' in bad),
+            row('출발 시각', f"일요일 {hm(v['t0'])}", v['t0'] != cur.T0),
+            row('피할 장소', ', '.join(v['avoid']) or '없음', v['avoid'] != [z.name for z in cur.FORBID], '피할 장소' in bad)]
+    if pend['card']['unsupported']:
+        rows.append(row('반영할 수 없는 요청', '<br>'.join(pend['card']['unsupported']), err=True))
+    return ("<table style='width:100%;border-collapse:collapse;border:1.5px solid #f3b79b;font-size:14.5px'>"
             "<tr style='background:#fdeee6'><td colspan=2 style='padding:9px 12px;font-weight:700'>🧠 AI가 읽은 조건표</td></tr>"
             + ''.join(rows) + '</table>')
+
+
+def _parse_hour(t: str) -> float | None:
+    import re
+    m = re.search(r'(\d{1,2})\s*[:시]\s*(\d{1,2})?', str(t)) or re.search(r'(\d{1,2})(?:\.(\d+))?', str(t))
+    if not m:
+        return None
+    h = int(m.group(1)); rest = m.group(2)
+    if '반' in str(t):
+        return h + 0.5
+    return h + (int(rest) / 60 if rest and (':' in str(t) or '시' in str(t)) else (float('0.' + rest) if rest else 0.0))
+
+
+def apply_table_edit(pend, df) -> dict:
+    """사용자가 표에서 고친 값 → 엔진 조건 검증 (AI 없이)"""
+    val = dict(zip(df['항목'], df['값']))
+    ev_key = parse_event(val['종목']) or next((k for k, e in EVENTS.items() if e.label in str(val['종목'])), None)
+    card = dict(pend['card'], unsupported=[], question=None)
+    if ev_key is None:
+        return dict(pend, card=card, params=None, perr=dict(항목='종목', error="풀코스·하프·10K 중 하나로 적어 주세요."))
+    t0 = _parse_hour(val['출발 시각'])
+    if t0 is None:
+        return dict(pend, card=card, params=None, perr=dict(항목='출발 시각', error="'08:00'처럼 적어 주세요."))
+    avoid = [x.strip() for x in str(val['피할 장소']).replace('없음', '').split(',') if x.strip()]
+    base = params_for(ev_key) if ev_key != S.params.EVENT else S.params
+    keep = tuple(z for z in base.FORBID if z.name in avoid)                     # 이미 있는 금지 구간은 그대로 유지
+    card.update(event=ev_key, start_place=val['출발지'], finish_place=val['도착지'], start_hour=t0, avoid_places=avoid)
+    newp, err = build_params(S, event=ev_key, start_place=str(val['출발지']).strip(), finish_place=str(val['도착지']).strip(),
+                             start_hour=t0, clear_forbidden=True, avoid_places=[x for x in avoid if x not in {z.name for z in keep}])
+    if newp is not None:
+        newp = newp.with_(FORBID=keep + tuple(newp.FORBID))
+    return dict(pend, card=card, params=newp, perr=err)
 
 
 def page_goal():
     st.title('① 목표 입력')
     role_strip('담당자의 <b>말로 된 목표</b>를 조건표로 바꿔 보여 주고, 반영할 수 없는 요청은 이유와 함께 알려 줍니다',
-               '확인된 조건표로 <b>최적 코스를 계산</b>합니다 — 공인 거리·회귀 금지·재방문 금지·금지 구간은 항상 지켜집니다')
+               '확인된 조건표로 <b>최적 코스를 계산</b>합니다')
     if not KEY:
         st.info('AI가 연결되지 않았습니다 (Streamlit secrets에 ANTHROPIC_API_KEY).')
     pend = st.session_state.get('pending')
@@ -290,34 +326,46 @@ def page_goal():
             st.rerun()
         return
 
-    # 2) 조건표 확인
     st.markdown(f"**입력한 내용** — “{pend['text']}”")
     if pend.get('error'):
         st.error(pend['error'])
         if st.button('다시 입력'):
             st.session_state.pop('pending'); st.rerun()
         return
-    st.markdown(condition_html(pend), unsafe_allow_html=True)
     e = pend['perr']
-    if e:
-        st.warning(f"{e.get('항목', '')}: {e.get('error', '')}" + (f" 후보: {', '.join(e['후보'])}" if e.get('후보') else ''))
+    editing = st.session_state.get('fixing') or bool(e)
+
+    if editing:                                            # 3) 보강: 표에서 직접 수정
+        v = _view(pend)
+        st.markdown('**조건표를 직접 고쳐 주세요** — 값 칸을 눌러 수정합니다. 피할 장소는 쉼표로 구분.')
+        df = pd.DataFrame([{'항목': '종목', '값': EVENTS[v['event']].label}, {'항목': '출발지', '값': v['start']},
+                           {'항목': '도착지', '값': v['finish']}, {'항목': '출발 시각', '값': hm(v['t0'])},
+                           {'항목': '피할 장소', '값': ', '.join(v['avoid']) or '없음'}])
+        ed = st.data_editor(df, key=f"edit_{hash(pend['text'])}_{len(str(pend['card']))}", hide_index=True, width='stretch',
+                            disabled=['항목'], num_rows='fixed',
+                            column_config={'값': st.column_config.TextColumn('값', help='종목: 풀코스·하프·10K / 출발 시각: 08:00')})
+        if e:
+            st.warning(f"{e.get('항목', '')}: {e.get('error', '')}" + (f" 후보: {', '.join(e['후보'])}" if e.get('후보') else ''))
+        c1, c2 = st.columns([2, 1])
+        if c1.button('수정 반영', type='primary', width='stretch'):
+            st.session_state['pending'] = apply_table_edit(pend, ed)
+            if st.session_state['pending']['perr'] is None:
+                st.session_state.pop('fixing', None)
+            st.rerun()
+        if c2.button('처음부터', width='stretch'):
+            st.session_state.pop('pending'); st.session_state.pop('fixing', None); st.rerun()
+        return
+
+    st.markdown(condition_html(pend), unsafe_allow_html=True)   # 2) 조건표 확인
     if pend['card'].get('question'):
         st.info(f"AI 확인 질문: {pend['card']['question']}")
     st.markdown('#### 이 조건으로 코스를 만들까요?')
     c1, c2, c3 = st.columns([2, 2, 1])
-    yes = c1.button('✅ 네, 맞습니다 — 코스 계산', type='primary', width='stretch', disabled=bool(e))
-    fix = c2.button('✏️ 아니요, 보강할게요', width='stretch')
+    yes = c1.button('✅ 네, 맞습니다 — 코스 계산', type='primary', width='stretch')
+    if c2.button('✏️ 아니요, 보강할게요', width='stretch'):
+        st.session_state['fixing'] = True; st.rerun()
     if c3.button('처음부터', width='stretch'):
-        st.session_state.pop('pending'); st.session_state.pop('fixing', None); st.rerun()
-    if fix:
-        st.session_state['fixing'] = True
-    if st.session_state.get('fixing') or e:                # 3) 보강: 원래 문장 + 추가 설명으로 다시 해석
-        more = st.text_input('무엇을 고치거나 더할까요?', key='fix_text', placeholder='예) 도착은 올림픽공원이 아니라 잠실종합운동장으로')
-        if st.button('🧠 보강해서 다시 조건표 만들기', disabled=not (KEY and more.strip())):
-            with st.spinner('AI가 보강 내용을 반영하는 중…'):
-                st.session_state['pending'] = interpret(f"{pend['text']}\n(보강) {more.strip()}")
-            st.session_state.pop('fixing', None); st.session_state.pop('fix_text', None)
-            st.rerun()
+        st.session_state.pop('pending'); st.rerun()
     if yes:                                                # 4) 확정 → 계산 → 2단계
         newp = pend['params']
         res = run_solve(newp)
@@ -591,7 +639,7 @@ FLOW_HTML = (
         ('h', '목표를 말로 입력', '“건대입구역 근처는 피해 줘”', ''),
         ('l', '조건표 작성', '종목·출발·도착·시각·피할 장소 · 반영 불가 요청 알림', ''),
         ('q', '장소가 데이터에 있나?', '정류소 위치에서 검색', '아니오·여러 곳 → 후보 제시, 사람이 선택'),
-        ('h', '“이 조건이 맞습니까?”', 'HTML 조건표 확인', '아니요 → 문장으로 보강 → AI가 다시 조건표')])
+        ('h', '“이 조건이 맞습니까?”', 'HTML 조건표 확인', '아니요 → 표에서 직접 수정')])
     + _steps('2단계 · 조건을 코스로 (② 결과 비교)', [
         ('e', 'MILP 풀이', '사전 계산이면 즉시, 아니면 10초~2분', ''),
         ('q', '해가 있나?', '규칙을 모두 지키는 코스', '아니오 → 이유 + 완화 후보 → 1단계로'),
