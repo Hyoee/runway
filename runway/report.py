@@ -48,7 +48,10 @@ def facts(res: dict, asis: dict | None) -> dict:
 
 
 def timetable(res: dict) -> pd.DataFrame:
-    return pd.DataFrame(res['roads']).rename(columns={'km': '구간 시작(km)', '도로': '도로', '길이km': '길이(km)', '피해': '못 타는 승객(명)', '통제': '통제 시각'})
+    df = pd.DataFrame(res['roads']).rename(columns={'km': '구간 시작(km)', '도로': '도로', '길이km': '길이(km)', '정류장': '버스 정류장(곳)',
+                                                    '피해': '못 타는 승객(명)', '통제': '통제 시각'})
+    cols = ['구간 시작(km)', '도로', '길이(km)', '버스 정류장(곳)', '못 타는 승객(명)', '통제 시각']
+    return df[[c for c in cols if c in df.columns]]
 
 
 def routes_df(res: dict) -> pd.DataFrame:

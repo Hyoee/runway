@@ -48,7 +48,10 @@ def evaluate(sc: Scenario, order) -> dict:
         kmh += s['length'] / 1000 * (w[1] - max(w[0], 6.0))
     done = set()
     for r in rows:
-        w = visits[r['seg']]; r['피해'] = 0 if r['seg'] in done else round(seg_r[r['seg']]); done.add(r['seg'])
+        w = visits[r['seg']]; first = r['seg'] not in done
+        r['피해'] = round(seg_r[r['seg']]) if first else 0
+        r['정류장'] = len(net.segs[r['seg']]['stops']) if first else 0     # 같은 구간을 다시 지나면 중복 집계하지 않음 (KPI 'stops'와 같은 기준)
+        done.add(r['seg'])
         r['통제'] = f'{_hm(w[0])}–{_hm(w[1])}'
     # v2: 우회 노선 이용객 — 노선별 통제 창 = 그 노선 정류장이 있는 코스 구간들의 통제 창 합집합(첫 시작~마지막 해제)
     rwin = {}
@@ -82,8 +85,8 @@ def road_table(ev, min_len=300) -> pd.DataFrame:
     seq = []
     for r in ev['rows']:
         if not seq or seq[-1]['도로'] != r['도로']:
-            seq.append(dict(km=r['km'], 도로=r['도로'], 길이km=0.0, 피해=0, 통제=r['통제']))
-        seq[-1]['길이km'] += r['길이m'] / 1000; seq[-1]['피해'] += r['피해']
+            seq.append(dict(km=r['km'], 도로=r['도로'], 길이km=0.0, 정류장=0, 피해=0, 통제=r['통제']))
+        seq[-1]['길이km'] += r['길이m'] / 1000; seq[-1]['피해'] += r['피해']; seq[-1]['정류장'] += r.get('정류장', 0)
     df = pd.DataFrame([q for q in seq if q['길이km'] * 1000 >= min_len])
     if len(df):
         df['길이km'] = df['길이km'].round(1)
