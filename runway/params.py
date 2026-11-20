@@ -73,7 +73,7 @@ class Params(_Frozen):
     ALPHA: float = Field(0.0, ge=0, description='영향 노선 1개당 고정 벌점 (노트북 v1은 60). 우회 영향은 DETOUR_W로 승객 단위 계산')
     DETOUR_W: float = Field(0.0, ge=0, le=1, description='우회 노선 이용객 1명의 가중치 (못 타는 승객 1명 = 1). 기본 0 = 못 타는 승객만. '
                                                          '통제 시간 동안 우회하는 노선의 전체 이용객 중 지연을 겪는 비율로 해석')
-    TURN: tuple[float, float, float] = (1000.0, 2000.0, 5000.0)
+    TURN: tuple[float, float, float] = (2000.0, 4000.0, 10000.0)   # 코스 단순성 ×2로 고정 (방향 전환 1회 = 승객 2,000명 상당)
     PEN_TWIN: float = 3.0
     PEN_NEAR: float = 2.0
     NEAR_R: tuple[float, float] = (300.0, 800.0)
@@ -119,5 +119,5 @@ SCHEDULE_FIELDS = ('T0', 'V_LEAD', 'V_SWEEP', 'PRE', 'POST', 'STAGE', 'LMAX', 'S
 DEFAULT = Params()
 # 노트북(v1)의 목적식: 노선 1개 = 60점, 우회 승객 미반영 — 회귀 테스트와 비교용
 LOTTE = Landmark(name='롯데월드타워', coord=(37.5126, 127.1025))       # 30km 이후 조망 ≥ 2km (노트북 v1의 정체성 조건)
-NOTEBOOK = Params(ALPHA=60.0, DETOUR_W=0.0, DAYTYPE='weekend', IDENTITY=(LOTTE,), T0=8.0, NO_RETURN=False, AREA_LIMIT=False)
+NOTEBOOK = Params(TURN=(1000.0, 2000.0, 5000.0), ALPHA=60.0, DETOUR_W=0.0, DAYTYPE='weekend', IDENTITY=(LOTTE,), T0=8.0, NO_RETURN=False, AREA_LIMIT=False)
 MODEL_VERSION = 'v3'    # 목적식·데이터가 바뀌면 올린다 → 저장된 결과 캐시 키가 달라져 섞이지 않음

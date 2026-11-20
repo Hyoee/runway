@@ -22,15 +22,11 @@ from runway.events import params_for  # noqa: E402
 from runway.params import NETWORK_FIELDS  # noqa: E402
 
 
-PASSENGER_FIRST = DEFAULT.with_(TURN=tuple(t * 0.5 for t in DEFAULT.TURN))
-
 SCENARIOS = {                                   # 이름: 조건 (앱 사이드바 버튼·챗봇이 즉시 답하는 결과)
     '기본(일요일 07:30)': DEFAULT,
     '출발 07:00': DEFAULT.with_(T0=7.0),
     '출발 08:00': DEFAULT.with_(T0=8.0),
     '출발 09:00': DEFAULT.with_(T0=9.0),
-    '꺾임 덜 중시(벌점 ×0.5)': PASSENGER_FIRST,
-    '단순성 우선(벌점 ×2)': DEFAULT.with_(TURN=tuple(t * 2 for t in DEFAULT.TURN)),
     '하프 기본': params_for('half'),
     '10K 기본': params_for('10k'),
 }

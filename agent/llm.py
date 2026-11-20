@@ -27,7 +27,6 @@ class ConditionCard(BaseModel):
     finish_place: str | None = Field(None, description='도착지 장소 이름 (바꾸자는 말이 있을 때만)')
     start_hour: float | None = Field(None, description='출발 시각(시). 07:30 → 7.5. 언급 없으면 null')
     avoid_places: list[str] = Field(default_factory=list, description='코스가 피해야 할 장소 이름들 (병원, 학교, 특정 역 등)')
-    simplicity: Literal[0.5, 1.0, 2.0, 3.0] | None = Field(None, description='코스 단순성 배율. 단순하게=2, 아주 단순=3, 덜 신경=0.5')
     goals_understood: list[str] = Field(description='사용자의 목표를 어떻게 이해했는지, 조건 하나당 한 줄 (한국어)')
     unsupported: list[str] = Field(default_factory=list, description='이 서비스로 반영할 수 없는 요청과 그 이유')
     question: str | None = Field(None, description='애매해서 사용자에게 확인할 질문 (없으면 null)')
@@ -56,9 +55,9 @@ SYS = """당신은 서울 도심 마라톤 코스를 설계하는 RunWay의 AI�
 - 장소 좌표를 지어내지 마세요. 장소는 이름만 적습니다.
 - 랜드마크 조망 조건은 없습니다. 한국어로, 담당자가 바로 쓸 수 있게 짧고 구체적으로."""
 
-GOAL_GUIDE = """서비스가 반영할 수 있는 조건: 종목(풀코스·하프·10K), 출발지, 도착지, 출발 시각(06:00~10:00, 30분 단위), 피할 장소(반경 150m 도로 금지),
-코스 단순성(꺾임 벌점 배율 0.5/1/2/3). 항상 지켜지는 규칙: 공인 거리, 회귀·재방문 금지, 같은 교차로 1회.
-최적화 목표는 '정류장이 코스에 들어가 통제 시간 동안 버스를 못 타는 승객' 최소화 + 코스 단순성입니다.
+GOAL_GUIDE = """서비스가 반영할 수 있는 조건: 종목(풀코스·하프·10K), 출발지, 도착지, 출발 시각(06:00~10:00, 30분 단위), 피할 장소(반경 150m 도로 금지).
+항상 지켜지는 규칙: 공인 거리, 회귀·재방문 금지, 같은 교차로 1회.
+최적화 목표는 '정류장이 코스에 들어가 통제 시간 동안 버스를 못 타는 승객' 최소화입니다 (꺾임 벌점은 고정값이라 바꿀 수 없음 — '더 단순하게' 같은 요청은 unsupported에 적으세요).
 이 밖의 요청(예: 특정 도로를 반드시 지나기, 날씨, 참가자 수, 예산)은 unsupported에 이유와 함께 적으세요."""
 
 

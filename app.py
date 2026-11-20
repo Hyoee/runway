@@ -2,7 +2,7 @@
 
     streamlit run app.py
 
-흐름: ① 목표 입력(LLM: 말 → 조건표) → ② 결과 비교(최적화 엔진: 조건표 → 코스·숫자) → ③ 협의 자료(LLM: 숫자 → 기관별 브리핑)
+흐름: ① 목표 입력(LLM: 말 → 조건) → ② 결과 비교(최적화 엔진: 조건 → 코스·숫자) → ③ 협의 자료(LLM: 숫자 → 기관별 브리핑)
       + AI 어시스턴트(질의응답) + 작동 원리(왜 LLM, 왜 최적화 엔진, 구조도, 플로우차트)
 숫자는 모두 runway 엔진(PuLP MILP)이 계산하고, LLM은 조건 해석과 설명만 한다. AI가 연결되지 않아도 흐름은 끊기지 않는다.
 """
@@ -198,7 +198,7 @@ def course_map(courses, p, key, height=480, turn_file=None):
 TILES = [('못 타는 승객 (명)', 'riders', '정류장이 마라톤 코스에 들어가 통제 시간 동안 버스를 못 타는 승객 (일요일 하루 기준)'),
          ('통제되는 정류장', 'stops', '코스 위에 있어 통제 시간 동안 쓸 수 없는 버스 정류장 수'),
          ('영향 버스 노선', 'routes', '코스 위에 정류장이 있는 버스 노선 수'),
-         ('방향 전환 45°↑', 'turns', '러너가 외우기 쉬운 단순한 코스일수록 적음'),
+         ('방향 전환 45°↑', 'turns', '45° 이상 방향을 바꾸는 횟수'),
          ('통제 필요 교차로', 'junctions', '코스가 지나가 통제 인력이 필요한 교차로 수')]
 
 
@@ -241,88 +241,60 @@ with st.sidebar:
 
 # ───────────────────────── ① 목표 입력 ─────────────────────────
 def page_goal():
-    st.title('① 목표 입력 → 조건표')
-    role_strip('담당자의 <b>말로 된 목표</b>를 엔진이 읽을 수 있는 <b>조건표</b>로 바꾸고, 반영할 수 없는 요청은 이유와 함께 알려 줍니다',
-               '아직 일하지 않습니다 — 조건표가 확정되면 다음 단계에서 계산합니다')
-    examples = ['병원 앞은 피하고, 코스는 단순하게 해 줘', '출발을 8시로 늦추면 승객 피해가 줄어?', '10K로 바꾸고 합정역 근처는 피해 줘',
-                '하프 코스로, 회귀 없이 깔끔하게']
-    st.markdown('**어떤 코스를 원하세요?** 문장으로 적으면 AI가 조건표를 만들어 아래에 채웁니다.')
-    cols = st.columns(len(examples))
-    for c, ex in zip(cols, examples):
+    st.title('① 목표 입력')
+    role_strip('담당자의 <b>말로 된 목표</b>를 엔진이 읽을 수 있는 조건으로 바꾸고, 반영할 수 없는 요청은 이유와 함께 알려 줍니다',
+               '바뀐 조건으로 <b>최적 코스를 계산</b>합니다 — 공인 거리·회귀 금지·재방문 금지·금지 구간은 항상 지켜집니다')
+    examples = ['건대입구역 근처는 피해 줘', '출발을 8시로 늦춰 줘', '10K로 바꾸고 합정역 근처는 피해 줘', '하프 코스로 바꿔 줘']
+    st.markdown('**어떤 코스를 원하세요?** 문장으로 적으면 AI가 조건을 읽고 엔진이 바로 계산합니다.')
+    for c, ex in zip(st.columns(len(examples)), examples):
         if c.button(ex, key=f'ex_{ex}', width='stretch'):
             st.session_state['goal_text'] = ex
     goal = st.text_area('목표', key='goal_text', height=90, label_visibility='collapsed',
-                        placeholder='예) 건대입구역 근처는 피하고 출발을 7시로 당겨 줘. 코스는 단순한 게 좋아.')
-    if st.button('🧠 AI로 조건표 만들기', type='primary', disabled=not (KEY and goal.strip())):
-        with st.spinner('AI가 목표를 조건표로 바꾸는 중…'):
-            card, err = llm_call(llm.interpret_goal, goal, describe_params(S.params))
-        if err:
-            st.error(err)
-        else:
-            st.session_state['ai_card'] = dict(goal=goal, card=card.model_dump(), warn=llm.check_numbers(card, goal, describe_params(S.params)))
+                        placeholder='예) 건대입구역 근처는 피하고 출발을 7시로 당겨 줘.')
     if not KEY:
-        st.info('AI가 연결되지 않았습니다 — 아래 조건표를 직접 채워도 같은 엔진으로 계산합니다. (Streamlit secrets에 ANTHROPIC_API_KEY)')
-
-    ai = st.session_state.get('ai_card')
-    c = (ai or {}).get('card') or {}
-    if ai:
-        with st.container(border=True):
-            st.markdown(f"**AI가 이해한 목표** — “{ai['goal']}”")
-            for g in c.get('goals_understood', []):
-                st.markdown(f'- {g}')
-            for u in c.get('unsupported', []):
-                st.warning(f'반영할 수 없는 요청: {u}')
-            if c.get('question'):
-                st.info(f"확인 질문: {c['question']}")
-            if ai.get('warn'):
-                st.caption('⚠️ 근거 없는 숫자: ' + ', '.join(ai['warn']))
-
-    p = S.params
-    ev_now = c.get('event') or p.EVENT
-    base = params_for(ev_now) if ev_now != p.EVENT else p
-    st.markdown('#### 조건표 ' + ('<span style="background:#fdeee6;border-radius:4px;padding:2px 6px;font-size:13px">AI 제안이 채워짐 — 확인·수정 후 계산</span>' if ai else ''),
-                unsafe_allow_html=True)
-    with st.form('card'):
-        c1, c2, c3 = st.columns(3)
-        ev_sel = c1.selectbox('종목', list(EVENTS), index=list(EVENTS).index(ev_now), format_func=lambda k: EVENTS[k].label)
-        start = c2.text_input('출발지', c.get('start_place') or base.START_NAME)
-        finish = c3.text_input('도착지', c.get('finish_place') or base.FINISH_NAME)
-        c4, c5, c6 = st.columns(3)
-        T_OPTS = [6.0 + 0.5 * i for i in range(9)]
-        t_val = float(c['start_hour']) if c.get('start_hour') in T_OPTS else (float(base.T0) if float(base.T0) in T_OPTS else 7.5)
-        t0 = c4.select_slider('출발 시각', T_OPTS, value=t_val, format_func=hm)
-        simp0 = c.get('simplicity') or (round(base.TURN[0] / DEFAULT.TURN[0], 1) if round(base.TURN[0] / DEFAULT.TURN[0], 1) in (0.5, 1.0, 2.0, 3.0) else 1.0)
-        simple = c5.select_slider('코스 단순성 (꺾임 벌점 배율)', [0.5, 1.0, 2.0, 3.0], value=simp0)
-        avoid = c6.text_input('피할 장소 (쉼표로 구분)', ', '.join(c.get('avoid_places', [])),
-                              help='정류소 위치 데이터에서 찾은 장소의 반경 150m 도로를 쓰지 않습니다')
-        st.caption('항상 지켜지는 규칙: 공인 거리 · 회귀(반환 왕복) 금지 · 재방문 금지 · 같은 교차로 1회 · 금지 구간 회피 · 데이터 영역 안 도로')
-        go = st.form_submit_button('⚙️ 이 조건으로 최적 코스 계산', type='primary', width='stretch')
-    if go:
-        newp, err = build_params(S, event=ev_sel, start_place=start, finish_place=finish, start_hour=t0, simplicity=simple,
-                                 avoid_places=[x.strip() for x in avoid.split(',') if x.strip()])
-        if err:
-            st.error(f"{err.get('항목', '')} {err.get('error', '')}")
-            if err.get('후보'):
-                st.info('후보: ' + ', '.join(err['후보']))
-            return
-        res = run_solve(newp)
-        if not res.get('ok'):
-            st.error(f"조건을 만족하는 코스가 없습니다: {res.get('reason')} — 피할 장소를 줄이거나 출발·도착을 바꿔 보세요.")
-            return
-        S.params, S.result = newp, res
-        for k in ('briefing', 'tradeoff', 'cf', 'cf_ai'):
-            st.session_state.pop(k, None)
-        st.switch_page(PAGES['result'])
+        st.info('AI가 연결되지 않았습니다 (Streamlit secrets에 ANTHROPIC_API_KEY). 종목은 왼쪽 사이드바에서 바꿀 수 있습니다.')
+    if not st.button('🧠 AI로 코스 계산', type='primary', disabled=not (KEY and goal.strip())):
+        return
+    with st.spinner('AI가 목표를 읽는 중…'):
+        card, err = llm_call(llm.interpret_goal, goal, describe_params(S.params))
+    if err:
+        st.error(err); return
+    changed = card.event or card.start_place or card.finish_place or card.start_hour is not None or card.avoid_places
+    if not changed:
+        for u in card.unsupported:
+            st.warning(f'반영할 수 없는 요청: {u}')
+        st.info(card.question or '바꿀 조건을 찾지 못했습니다. 종목·출발지·도착지·출발 시각·피할 장소 중 무엇을 바꿀지 적어 주세요.')
+        return
+    newp, err = build_params(S, event=card.event, start_place=card.start_place, finish_place=card.finish_place,
+                             start_hour=card.start_hour, avoid_places=card.avoid_places)
+    if err:
+        st.error(f"{err.get('항목', '')} {err.get('error', '')}")
+        if err.get('후보'):
+            st.info('이 중 하나로 다시 적어 주세요: ' + ', '.join(err['후보']))
+        return
+    res = run_solve(newp)
+    if not res.get('ok'):
+        st.error(f"조건을 만족하는 코스가 없습니다: {res.get('reason')} — 피할 장소를 줄이거나 출발·도착을 바꿔 보세요.")
+        return
+    S.params, S.result = newp, res
+    for k in ('briefing', 'tradeoff', 'cf', 'cf_ai'):
+        st.session_state.pop(k, None)
+    st.session_state['ai_note'] = dict(goal=goal, unsupported=card.unsupported, question=card.question)
+    st.switch_page(PAGES['result'])
 
 
 # ───────────────────────── ② 결과 비교 ─────────────────────────
 def page_result():
     st.title('② 결과 비교')
     role_strip('여러 안의 <b>장단점을 말로 정리</b>하고, 엔진이 고른 도로가 <b>왜 최선인지</b> 설명합니다',
-               '도로 1,000여 개 구간 조합에서 <b>못 타는 승객 + 코스 단순성</b>이 최소인 코스를 찾고, 도로를 빼며 <b>다시 계산</b>해 근거를 만듭니다')
+               '도로 1,000여 개 구간 조합에서 <b>못 타는 승객</b>이 최소인 코스를 찾고, 도로를 빼며 <b>다시 계산</b>해 근거를 만듭니다')
     p, R, A = S.params, S.result, S.ensure_asis()
     ev = event_of(p)
     st.caption(f'현재 조건: {describe_params(p)}')
+    if (note := st.session_state.pop('ai_note', None)):
+        st.success(f"“{note['goal']}” → AI가 조건을 읽고 엔진이 다시 계산했습니다.")
+        for u in note['unsupported']:
+            st.warning(f'반영하지 못한 요청: {u}')
     kpi_tiles(R['kpi'], A['kpi'] if A else None)
     st.caption(f"변화는 AS-IS({A.get('source', '')}) 대비" if A else '이 종목은 기존 코스 데이터가 없어 비교하지 않습니다.')
     course_map(([(A, 'AS-IS', C_ASIS)] if A else []) + [(R, 'TO-BE', C_TOBE)], p, key='main_map', turn_file=ev.asis_file if A else None)
@@ -534,14 +506,14 @@ def _flow(down, up):
 
 
 ARCH_HTML = (
-    _layer('① 사용자 화면 — Streamlit', ['<b>① 목표 입력</b><br>말로 목표 입력 → 조건표 확인', '<b>② 결과 비교</b><br>지도·KPI·여러 안·도로 빼고 재계산',
+    _layer('① 사용자 화면 — Streamlit', ['<b>① 목표 입력</b><br>말로 목표 입력 → 바로 계산', '<b>② 결과 비교</b><br>지도·KPI·여러 안·도로 빼고 재계산',
                                          '<b>③ 협의 자료</b><br>기관별 브리핑·통제 시각표·노선·코스 파일', '<b>AI 어시스턴트</b><br>질문·조건 변경'], '#eaf2fc', '#9ec5f0')
     + _flow('자연어 목표 · 질문', '설명 · 브리핑 · 코스 · KPI')
     + _layer('② LLM 계층 — Claude Opus 5.5 · 말 ↔ 조건, 숫자 → 말 (숫자는 만들지 않음)',
-             ['<b>목표 → 조건표</b><br>구조화 출력 · 반영 불가 요청 · 확인 질문', '<b>도구 호출 에이전트</b><br>Tool Runner · 도구 6종',
+             ['<b>목표 → 엔진 조건</b><br>구조화 출력 · 반영 불가 요청 알림', '<b>도구 호출 에이전트</b><br>Tool Runner · 도구 6종',
               '<b>장단점 요약 · 이유 설명</b><br>여러 안 비교 · 반사실 결과 해석', '<b>기관별 브리핑</b><br>서울시 · 경찰 · 운수사',
               '<b>숫자 대조 검사</b><br>엔진에 없는 숫자 경고'], '#fdeee6', '#f3b79b')
-    + _flow('조건표 (사람 확인 후) · 도구 호출', 'facts — 엔진이 계산한 숫자만')
+    + _flow('엔진 조건 · 도구 호출', 'facts — 엔진이 계산한 숫자만')
     + _layer('③ 최적화 엔진 — runway · 조건 → 코스·숫자', ['<b>조건 검증</b><br>Pydantic · 장소는 정류소 데이터에서만',
                                                          '<b>시나리오</b><br>위치별 통제 시간 × 정류장 수요', '<b>MILP</b><br>PuLP + HiGHS<br>LP 완화 → 회랑 → MILP',
                                                          '<b>정밀 평가 · 규칙 검사</b><br>10m 단위 · 독립 검증', '<b>결과 저장</b><br>더 좋은 해만 교체 · 반사실 재계산'],
@@ -569,13 +541,13 @@ def _steps(title, steps):
 
 FLOW_HTML = (
     _steps('1단계 · 목표를 조건으로 (① 목표 입력)', [
-        ('h', '목표를 말로 입력', '“병원 앞은 피하고 단순하게”', ''),
-        ('l', '조건표 작성', '이해한 목표 · 반영 불가 요청 · 확인 질문', ''),
+        ('h', '목표를 말로 입력', '“건대입구역 근처는 피해 줘”', ''),
+        ('l', '조건 해석', '종목·출발·도착·시각·피할 장소 · 반영 불가 요청 알림', ''),
         ('q', '장소가 데이터에 있나?', '정류소 위치에서 검색', '아니오·여러 곳 → 후보 제시, 사람이 선택'),
-        ('h', '조건표 확인·수정', '사람이 최종 결정', '')])
+        ('e', '조건 검증', '허용 범위 · 데이터 영역 확인', '')])
     + _steps('2단계 · 조건을 코스로 (② 결과 비교)', [
         ('e', 'MILP 풀이', '사전 계산이면 즉시, 아니면 10초~2분', ''),
-        ('q', '해가 있나?', '규칙을 모두 지키는 코스', '아니오 → 이유 + 완화 후보 → 1단계 조건표로'),
+        ('q', '해가 있나?', '규칙을 모두 지키는 코스', '아니오 → 이유 + 완화 후보 → 1단계로'),
         ('e', '규칙 검사 · 정밀 평가', '거리 · 회귀 · 재방문 · 금지 구간', ''),
         ('e', '여러 안 비교 · 도로 빼고 재계산', '“왜 이 길인가”의 숫자 근거', '')])
     + _steps('3단계 · 숫자를 협의 자료로 (③ 협의 자료)', [
@@ -591,7 +563,7 @@ def page_how():
     with c1, st.container(border=True):
         st.markdown('#### 🧠 왜 LLM이 필요한가')
         st.markdown("""
-- **목표가 말로 온다.** "병원 앞은 피하고, 코스는 단순하게"처럼 담당자의 요구는 조건 여러 개가 섞인 문장이다. 슬라이더로는 *피할 장소* 같은 열린 조건과 조합을 입력하기 어렵다 → **조건표로 번역**
+- **목표가 말로 온다.** "10K로 바꾸고 합정역 근처는 피해 줘"처럼 담당자의 요구는 조건 여러 개가 섞인 문장이다. 슬라이더로는 *피할 장소* 같은 열린 조건과 조합을 입력하기 어렵다 → **엔진 조건으로 번역**
 - **반영할 수 없는 요구를 걸러 낸다.** "반드시 ○○로를 지나기"처럼 엔진이 다루지 못하는 요청은 이유와 함께 표시하고, 애매하면 **되묻는다**
 - **숫자를 기관의 언어로 바꾼다.** 같은 결과라도 서울시(노선), 경찰(교차로·통제 시각), 운수사(정류장)가 알아야 할 것이 다르다 → **기관별 브리핑**
 - **트레이드오프를 설명한다.** 엔진은 '최적'만 알려 준다. 여러 안 사이에서 *무엇을 얻고 잃는지*는 말로 풀어야 결정할 수 있다""")
@@ -616,7 +588,7 @@ def page_how():
                     f"이런 판단은 전체 조합을 푸는 엔진만 할 수 있다. (② 결과 비교 → '왜 이 길인가'에서 직접 해 볼 수 있음)")
     st.markdown('#### 함께일 때만 되는 것')
     st.dataframe(pd.DataFrame([
-        {'능력': '말로 된 목표 이해', 'LLM 단독': '✅', '최적화 엔진 단독': '❌ (수식 입력 필요)', 'RunWay': '✅ LLM이 조건표로'},
+        {'능력': '말로 된 목표 이해', 'LLM 단독': '✅', '최적화 엔진 단독': '❌ (수식 입력 필요)', 'RunWay': '✅ LLM이 엔진 조건으로'},
         {'능력': '42.195km·회귀 금지 등 규칙 보장', 'LLM 단독': '❌', '최적화 엔진 단독': '✅', 'RunWay': '✅ 하드 제약 + 독립 검사'},
         {'능력': '1,000여 개 도로 조합의 최적 코스', 'LLM 단독': '❌', '최적화 엔진 단독': '✅', 'RunWay': '✅'},
         {'능력': '숫자의 정확성', 'LLM 단독': '❌ 지어낼 위험', '최적화 엔진 단독': '✅', 'RunWay': '✅ 엔진 숫자만 인용·자동 대조'},
@@ -631,7 +603,7 @@ def page_how():
     st.latex(r'\min\ \sum_{e,b} c_{e,b}\,y_{e,b} \;+\; \sum_{(e,g)} \tau_{eg}\,z_{eg} \;+\; \sum \rho\,\omega\,q \;+\; \varepsilon\sum_e \ell_e x_e')
     st.markdown("""
 - $c_{e,b}$: 도로 $e$를 코스의 $b$번째 3km 구간대에서 달릴 때 **통제 시간 동안 버스를 못 타는 승객** (위치마다 통제 시각이 달라 값이 다름)
-- $\\tau$: 방향 전환 벌점(코스 단순성), $\\rho\\omega q$: 되돌아오기·재방문 벌점, $\\varepsilon$: 미세 거리 비용
+- $\\tau$: 방향 전환 벌점(고정값), $\\rho\\omega q$: 되돌아오기·재방문 벌점, $\\varepsilon$: 미세 거리 비용
 - 제약: 출발→도착 하나의 경로 · 같은 교차로 1회 · 누적거리 전파(고리 금지) · 공인 거리 · 같은 도로 왕복 금지 · **회귀 금지**(1km 안 반대 방향 나란히 달리기) · **재방문 금지**(코스상 2km 넘게 떨어진 두 지점이 300m 안) · 금지 구간 · 데이터 영역""")
     st.markdown('#### 검증과 한계')
     c3, c4 = st.columns(2)

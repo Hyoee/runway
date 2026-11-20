@@ -86,7 +86,7 @@ def _resolve(s: Session, query: str, area=None):
 
 
 def build_params(s: Session, event=None, start_place=None, finish_place=None, start_hour=None, avoid_places=(), radius=150.0,
-                 clear_forbidden=False, simplicity=None, reset=False):
+                 clear_forbidden=False, reset=False):
     """조건표 → Params (채팅 도구와 ① 목표 입력 화면이 같은 경로로 검증). 반환: (Params, None) 또는 (None, 오류 dict)
     장소는 정류소 위치 데이터에서만 찾는다 — 없거나 애매하면 오류와 후보를 돌려준다."""
     ev_key = s.params.EVENT
@@ -113,8 +113,6 @@ def build_params(s: Session, event=None, start_place=None, finish_place=None, st
             forb += (Forbid(name=hit['name'], coord=hit['coord'], r=radius),)
     if clear_forbidden or avoid_places:
         upd['FORBID'] = forb
-    if simplicity is not None:
-        upd['TURN'] = tuple(t * float(simplicity) for t in DEFAULT.TURN)
     try:
         return p.with_(**upd), None
     except Exception as e:                         # 스키마 검증 실패 (범위 밖 값 등)
@@ -139,7 +137,7 @@ def make_tools(s: Session) -> list:
     @beta_tool
     def optimize_course(event: str | None = None, start_place: str | None = None, finish_place: str | None = None,
                         start_hour: float | None = None, add_forbidden_place: str | None = None, forbidden_radius_m: float = 150.0,
-                        clear_forbidden: bool = False, simplicity: float | None = None, reset: bool = False) -> str:
+                        clear_forbidden: bool = False, reset: bool = False) -> str:
         """현재 조건에서 바꿀 값만 받아 PuLP MILP로 최적 코스를 계산한다. 같은 조건을 이전에 풀었으면 즉시 돌려준다.
         새 조건이면 최대 2분 걸린다. 결과는 AS-IS(2026 JTBC 코스) 대비 변화율을 포함한다.
 
@@ -151,21 +149,20 @@ def make_tools(s: Session) -> list:
             add_forbidden_place: 코스에서 피할 장소 이름 (병원 앞 등). 반경 forbidden_radius_m 안의 도로를 쓰지 않는다
             forbidden_radius_m: 금지 반경(m), 기본 150
             clear_forbidden: True면 기존 금지 구간을 모두 해제
-            simplicity: 방향 전환 벌점 배율. 1이 기본, 2면 꺾임을 두 배로 싫어함(더 단순한 코스), 0.5면 덜 신경 씀
             reset: True면 현재 종목의 기본 조건으로 되돌린 뒤 나머지 값을 적용
         """
         args = {k: v for k, v in dict(event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour,
                                       add_forbidden_place=add_forbidden_place, clear_forbidden=clear_forbidden,
-                                      simplicity=simplicity, reset=reset).items() if v not in (None, False)}
+                                      reset=reset).items() if v not in (None, False)}
         newp, err = build_params(s, event=event, start_place=start_place, finish_place=finish_place, start_hour=start_hour,
                                  avoid_places=[add_forbidden_place] if add_forbidden_place else [], radius=forbidden_radius_m,
-                                 clear_forbidden=clear_forbidden, simplicity=simplicity, reset=reset)
+                                 clear_forbidden=clear_forbidden, reset=reset)
         if err:
             return record('optimize_course', args, dict(ok=False, **err))
         s.progress(f'조건: {describe_params(newp)}')
         res = s.engine.solve(newp, time_limit=INTERACTIVE_TIME_LIMIT, gap=INTERACTIVE_GAP, progress=s.progress)
         if not res['ok']:
-            hint = ['금지 구간 해제', '출발·도착을 분석 영역 중심 쪽으로', '코스 단순성(simplicity) 낮추기']
+            hint = ['금지 구간 해제', '출발·도착을 분석 영역 중심 쪽으로', '피할 장소 줄이기']
             return record('optimize_course', args, dict(ok=False, 조건=describe_params(newp), 이유=res['reason'], 완화_후보=hint))
         s.params, s.result = newp, res
         return record('optimize_course', args, dict(ok=True, **summarize(s, res)))
@@ -202,7 +199,7 @@ def make_tools(s: Session) -> list:
 
     @beta_tool
     def list_precomputed_scenarios() -> str:
-        """미리 계산해 둔 시나리오(출발 시각별·코스 단순성별)의 KPI 표. 조건을 바꾸면 어떻게 달라지는지 질문에 쓴다."""
+        """미리 계산해 둔 시나리오(출발 시각별·종목별)의 KPI 표. 조건을 바꾸면 어떻게 달라지는지 질문에 쓴다."""
         lib = [x for x in s.engine.library() if x['params'].EVENT == s.params.EVENT]     # 현재 종목만
         return record('list_precomputed_scenarios', {}, dict(종목=event_of(s.params).label, 지표_뜻=KPI_MEANING, 시나리오=[dict(
             조건=x['조건'], 못타는승객=x['kpi']['riders'], 통제정류장=x['kpi']['stops'], 영향노선=x['kpi']['routes'],

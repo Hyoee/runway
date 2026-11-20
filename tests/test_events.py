@@ -21,11 +21,10 @@ def test_full_preset_is_default():
 
 
 def test_full_results_unchanged(eng):
-    """종목 기능 추가 전 스냅숏과 풀코스 결과(코스 arc·KPI)가 완전히 같다"""
+    """AS-IS는 스냅숏과 완전히 같고, 기본 조건(코스 단순성 ×2 고정)은 이전 '단순성 우선(×2)' 결과와 같다"""
     snap = json.load(open(ROOT / 'tests' / 'snapshots' / 'full_before_events.json', encoding='utf-8'))
-    now = {x['조건']: x for x in eng.library() if x['params'].EVENT == 'full'}
-    for label, v in snap.items():
-        got = eng.asis(DEFAULT) if label == 'AS-IS' else now[label]
+    x2 = next(v for k, v in snap.items() if '×2' in k)
+    for got, v, label in ((eng.asis(DEFAULT), snap['AS-IS'], 'AS-IS'), (eng.cached(DEFAULT), x2, '기본(×2)')):
         assert got['order'] == v['order'], label
         assert {k: got['kpi'][k] for k in v['kpi']} == v['kpi'], label
 
