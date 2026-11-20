@@ -465,25 +465,15 @@ def page_result():
                 st.error(ca['err']) if ca.get('err') else show_tradeoff(ca['t'], ca['warn'])
 
     st.divider()
-    tabs = st.tabs(['KPI 표', '코스 도로별 통제 시각', '영향 버스 노선'] + (['AS-IS 문제점'] if A else []))
+    tabs = st.tabs(['코스 도로별 통제 시각', '영향 버스 노선'] + (['AS-IS 문제점'] if A else []))
     with tabs[0]:
-        rows = []
-        for lab, k, lower in KPI_LABELS:
-            if A is None:
-                rows.append({'지표': lab, 'TO-BE': R['kpi'][k]}); continue
-            av, tv = A['kpi'][k], R['kpi'][k]
-            better = None if lower is None or av == tv else ((tv < av) == lower)
-            rows.append({'지표': lab, 'AS-IS': av, 'TO-BE': tv, '변화': f'{(tv - av) / av * 100:+.0f}%' if av else '–',
-                         '판정': '' if better is None else ('개선' if better else '악화')})
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
-    with tabs[1]:
         st.dataframe(report.timetable(R), hide_index=True, width='stretch')
-    with tabs[2]:
+    with tabs[1]:
         cols3 = st.columns(2 if A else 1)
         for col, res, nm in zip(cols3, (R, A), ('TO-BE', 'AS-IS')):
             col.markdown(f"**{nm} · {len(res['route_list'])}개 노선**"); col.write(', '.join(res['route_list']))
     if A:
-        with tabs[3]:
+        with tabs[2]:
             for v in A['violations']:
                 st.markdown(f'- {v}')
             st.caption(f"출처: {A.get('source', '')}. 모델상 길이 {A['kpi']['length_km']}km (공식 경유지를 간선 도로망 위에 옮김)")
