@@ -43,9 +43,10 @@ def describe_params(p: Params) -> str:
         out.append('출발 %02d:%02d' % (int(p.T0), round(p.T0 % 1 * 60)))
     if p.IDENTITY != d.IDENTITY:
         out += [f'{lm.name} 조망≥{lm.L/1000:g}km' for lm in p.IDENTITY] or ['정체성 조건 없음']
-    if p.FORBID != d.FORBID:
-        out += [f'금지: {z.name}(반경 {z.r:g}m)' for z in p.FORBID if z not in d.FORBID]
-        out += [f'금지 해제: {z.name}' for z in d.FORBID if z not in p.FORBID]
+    zk = lambda z: (z.name, round(z.coord[0], 5), round(z.coord[1], 5), float(z.r))   # 값으로 비교 (객체 비교는 재로드 시 어긋남)
+    pk, dk = {zk(z) for z in p.FORBID}, {zk(z) for z in d.FORBID}
+    out += [f'금지: {z.name}(반경 {z.r:g}m)' for z in p.FORBID if zk(z) not in dk]
+    out += [f'금지 해제: {z.name}' for z in d.FORBID if zk(z) not in pk]
     if p.TURN != d.TURN:
         r = p.TURN[0] / d.TURN[0]
         out.append(f"{'승객 우선' if r < 1 else '단순성 우선'} (꺾임 벌점 ×{r:g})")

@@ -100,7 +100,8 @@ def build_params(s: Session, event=None, start_place=None, finish_place=None, st
     p = params_for(ev_key) if (reset or ev_key != s.params.EVENT) else s.params
     upd = {}
     for key, nm_key, q in (('START', 'START_NAME', start_place), ('FINISH', 'FINISH_NAME', finish_place)):
-        if q and q != getattr(p, nm_key):
+        cur = getattr(p, nm_key).replace(' ', '')
+        if q and q.replace(' ', '') not in cur and cur not in q.replace(' ', ''):   # '광화문' ≈ '광화문광장' → 그대로 둔다
             hit, err = _resolve(s, q, p.AREA)
             if err:
                 return None, dict(항목='출발지' if key == 'START' else '도착지', **err)
