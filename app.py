@@ -409,9 +409,6 @@ def page_result():
         st.info('이 종목은 기존(AS-IS) 코스 데이터가 없어 비교하지 않습니다.')
     else:
         st.caption(f"AS-IS: 2026 공식 코스 ({A.get('source', '')}) · TO-BE: 현재 조건으로 계산한 RunWay 코스 — {describe_params(p)}")
-        course_map([(A, 'AS-IS', C_ASIS), (R, 'TO-BE', C_TOBE)], p, key='cmp_map', height=420, turn_file=ev.asis_file)
-        st.markdown(f"<span style='color:{C_ASIS}'>━━</span> AS-IS (2026 공식 코스) &nbsp; <span style='color:{C_TOBE}'>━━</span> TO-BE (현재 코스)",
-                    unsafe_allow_html=True)
         rows = []
         for lab, k, _ in KPI_LABELS:
             av, tv = A['kpi'][k], R['kpi'][k]
