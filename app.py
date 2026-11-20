@@ -411,11 +411,6 @@ def page_result():
         opts = {'AS-IS (2026 공식 코스)': A} | opts
     chosen = st.multiselect('비교할 안 (최대 3개)', list(opts), default=list(opts)[:2], max_selections=3)
     if chosen:
-        cols = st.columns(len(chosen))
-        for i, (col, nm) in enumerate(zip(cols, chosen)):
-            with col:
-                st.markdown(f'**{nm}**')
-                course_map([(opts[nm], nm, [C_ASIS, C_TOBE, C_ALT][i] if not nm.startswith('AS-IS') else C_ASIS)], p, key=f'cmp_{i}', height=300)
         st.dataframe(pd.DataFrame([{'지표': lab, **{nm: opts[nm]['kpi'][k] for nm in chosen}} for lab, k, _ in KPI_LABELS]),
                      hide_index=True, width='stretch')
         if len(chosen) >= 2:
