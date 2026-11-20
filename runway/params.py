@@ -10,7 +10,7 @@ import hashlib
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 LatLon = tuple[float, float]
 
@@ -108,6 +108,12 @@ class Params(_Frozen):
         'sunday', description="수요 기준일: 'sunday'(대회일=일요일 평균, 기본) | 'weekend'(토·일, 노트북 v1) | 'all'(전체 일평균)")
 
     # ── 도우미 ──
+    @field_validator('FORBID')
+    @classmethod
+    def _sort_forbid(cls, v):
+        """금지 구간은 순서가 의미 없다 — 항상 같은 순서로 정렬해, 같은 조건이 같은 캐시 키·같은 결과를 갖게 한다"""
+        return tuple(sorted(v, key=lambda z: (z.name, round(z.coord[0], 6), round(z.coord[1], 6), z.r)))
+
     def with_(self, **kw) -> 'Params':
         """일부 값만 바꾼 새 Params (검증 포함).
         값 안의 모델(Forbid 등)은 dict로 풀어서 넘긴다 — Streamlit Cloud가 코드 일부만 다시 불러오면 같은 이름의
