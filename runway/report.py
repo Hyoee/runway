@@ -80,7 +80,7 @@ def rule_briefing(f: dict) -> dict:
         summary.append(f['비교'])
     top = f['피해_큰_도로'][:3]
     return dict(
-        title=f"{f['종목']} 코스 협의 브리핑 (규칙 기반 기본본 — AI 미연결)",
+        title=f"{f['종목']} 코스 협의 브리핑",
         summary=summary,
         for_seoul=[f"피해가 큰 구간: " + ', '.join(f"{r['도로']}({r['구간_시작_km']}km~, {r['못타는승객']:,}명)" for r in top),
                    f"영향 버스 노선 {f['영향_노선_수']}개 — 노선 목록 CSV 참조"],
